@@ -10,7 +10,7 @@ The Narcissus agent:
 
 from __future__ import annotations
 
-from tdt.core.personality import PersonalityProfile, NARCISSUS
+from tdt.core.personality import NARCISSUS, PersonalityProfile
 
 
 class NarcissusEngine:

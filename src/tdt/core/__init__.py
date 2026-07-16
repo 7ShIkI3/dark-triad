@@ -1,13 +1,13 @@
 """The Dark Triad — Core Engine Package."""
 
 from tdt.core.personality import (
-    PersonalityMode,
-    AggressionLevel,
-    PersonalityProfile,
+    MACHIAVELLI,
     NARCISSUS,
     PSYCHOPATH,
-    MACHIAVELLI,
+    AggressionLevel,
     FusionEngine,
+    PersonalityMode,
+    PersonalityProfile,
 )
 
 __all__ = [

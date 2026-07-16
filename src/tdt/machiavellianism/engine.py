@@ -11,7 +11,7 @@ The Machiavelli agent:
 
 from __future__ import annotations
 
-from tdt.core.personality import PersonalityProfile, MACHIAVELLI
+from tdt.core.personality import MACHIAVELLI, PersonalityProfile
 
 
 class MachiavelliEngine:

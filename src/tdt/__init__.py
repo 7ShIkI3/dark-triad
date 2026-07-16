@@ -10,13 +10,13 @@ __version__ = "0.1.0-alpha"
 __author__ = "The Dark Triad Project"
 
 from tdt.core import (
-    PersonalityMode,
-    AggressionLevel,
-    PersonalityProfile,
+    MACHIAVELLI,
     NARCISSUS,
     PSYCHOPATH,
-    MACHIAVELLI,
+    AggressionLevel,
     FusionEngine,
+    PersonalityMode,
+    PersonalityProfile,
 )
 
 __all__ = [

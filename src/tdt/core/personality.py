@@ -8,23 +8,22 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 class PersonalityMode(enum.Enum):
     """The three dark personality traits + fusion support."""
 
-    NARCISSISM = "narcissism"       # 🪞 Self-confident, aggressive, fast
-    PSYCHOPATHY = "psychopathy"     # 🔪 Relentless, uncensored, maximum coverage
-    MACHIAVELLIANISM = "mach"       # 🕸️ Strategic, stealthy, patient
+    NARCISSISM = "narcissism"  # 🪞 Self-confident, aggressive, fast
+    PSYCHOPATHY = "psychopathy"  # 🔪 Relentless, uncensored, maximum coverage
+    MACHIAVELLIANISM = "mach"  # 🕸️ Strategic, stealthy, patient
 
 
 class AggressionLevel(enum.Enum):
     """How aggressive the agent should be."""
 
-    STRATEGIC = "strategic"    # Minimal risk, stealth-first
+    STRATEGIC = "strategic"  # Minimal risk, stealth-first
     AGGRESSIVE = "aggressive"  # Balance speed and risk
-    MAXIMUM = "maximum"        # Full send, no limits
+    MAXIMUM = "maximum"  # Full send, no limits
     RELENTLESS = "relentless"  # Never stops, tries everything
 
 
@@ -36,20 +35,20 @@ class PersonalityProfile:
 
     # Core traits
     aggression: AggressionLevel
-    patience: float              # 0.0 (none) → 1.0 (infinite)
-    stealth: float               # 0.0 (loud) → 1.0 (ghost)
-    persistence: float           # 0.0 (gives up) → 1.0 (never)
-    deception: float             # 0.0 (direct) → 1.0 (multi-layer)
+    patience: float  # 0.0 (none) → 1.0 (infinite)
+    stealth: float  # 0.0 (loud) → 1.0 (ghost)
+    persistence: float  # 0.0 (gives up) → 1.0 (never)
+    deception: float  # 0.0 (direct) → 1.0 (multi-layer)
 
     # Decision parameters
     confirmation_threshold: float  # 0.0 = auto-approve, 1.0 = always confirm
-    self_preservation: float       # 0.0 = suicidal, 1.0 = paranoid
-    learning_rate: float           # 0.0 = ignores failure, 1.0 = remembers everything
+    self_preservation: float  # 0.0 = suicidal, 1.0 = paranoid
+    learning_rate: float  # 0.0 = ignores failure, 1.0 = remembers everything
 
     # Execution parameters
-    parallelism: int              # Max concurrent tool executions
-    retry_count: int              # Max retries per tool
-    timeout_modifier: float       # 1.0 = normal, <1.0 = impatient, >1.0 = patient
+    parallelism: int  # Max concurrent tool executions
+    retry_count: int  # Max retries per tool
+    timeout_modifier: float  # 1.0 = normal, <1.0 = impatient, >1.0 = patient
 
     # Tool preferences
     preferred_tools: list[str] = field(default_factory=list)
@@ -130,6 +129,7 @@ MACHIAVELLI = PersonalityProfile(
 
 # ── Personality Fusion ────────────────────────────────────────────────────────
 
+
 @dataclass
 class FusionProfile(PersonalityProfile):
     """A blended personality combining two base profiles."""
@@ -180,9 +180,7 @@ class FusionEngine:
             confirmation_threshold=_blend(
                 primary.confirmation_threshold, secondary.confirmation_threshold, sr
             ),
-            self_preservation=_blend(
-                primary.self_preservation, secondary.self_preservation, sr
-            ),
+            self_preservation=_blend(primary.self_preservation, secondary.self_preservation, sr),
             learning_rate=_blend(primary.learning_rate, secondary.learning_rate, sr),
             parallelism=max(primary.parallelism, int(secondary.parallelism * sr)),
             retry_count=max(primary.retry_count, int(secondary.retry_count * sr)),

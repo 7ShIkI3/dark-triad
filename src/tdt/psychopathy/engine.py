@@ -10,7 +10,7 @@ The Psychopath agent:
 
 from __future__ import annotations
 
-from tdt.core.personality import PersonalityProfile, PSYCHOPATH
+from tdt.core.personality import PSYCHOPATH, PersonalityProfile
 
 
 class PsychopathEngine:
