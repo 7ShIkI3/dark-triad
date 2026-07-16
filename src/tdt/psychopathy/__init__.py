@@ -1,5 +1,24 @@
-"""🔪 Psychopathy Module."""
+"""🔪 Psychopathy Module.
 
-from tdt.psychopathy.engine import PsychopathEngine, RelentlessLoop
+The Psychopath agent:
+- Zero hesitation, no moral safeguards
+- Tries EVERYTHING in parallel (parallelism=8)
+- Never gives up (max 999 retries per tool)
+- No tool is off-limits — all tools from ToolRegistry are actionable
+"""
 
-__all__ = ["PsychopathEngine", "RelentlessLoop"]
+from tdt.psychopathy.engine import (
+    BruteforceEngine,
+    PsychopathEngine,
+    PsychopathResult,
+    RelentlessLoop,
+    ToolAttempt,
+)
+
+__all__ = [
+    "PsychopathEngine",
+    "RelentlessLoop",
+    "BruteforceEngine",
+    "PsychopathResult",
+    "ToolAttempt",
+]
