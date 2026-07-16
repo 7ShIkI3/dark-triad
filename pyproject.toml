@@ -44,11 +44,11 @@ Repository = "https://github.com/nousresearch/dark-triad.git"
 [project.scripts]
 tdt = "tdt.cli.main:app"
 
-[tool.hatch.build.targets.sdist]
-include = ["/tdt"]
-
 [tool.hatch.build.targets.wheel]
-packages = ["tdt"]
+packages = ["src/tdt"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/tdt"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

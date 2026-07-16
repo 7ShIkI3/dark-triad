@@ -134,8 +134,8 @@ MACHIAVELLI = PersonalityProfile(
 class FusionProfile(PersonalityProfile):
     """A blended personality combining two base profiles."""
 
-    primary: PersonalityProfile = field(repr=False)
-    secondary: PersonalityProfile = field(repr=False)
+    primary: PersonalityProfile | None = field(default=None, repr=False)
+    secondary: PersonalityProfile | None = field(default=None, repr=False)
     ratio: float = 0.8  # How much of primary vs secondary (0.5-1.0)
 
 
