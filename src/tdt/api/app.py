@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from tdt.agents.registry import AgentRegistry
 from tdt.core.ai_router import AIRouter
+from tdt.core.resilience import RateLimiter
 from tdt.core.sandbox import SandboxManager, SandboxStatus
 from tdt.orchestrator.battle_manager import BattleManager
 from tdt.orchestrator.engagement import EngagementBuilder
@@ -37,6 +38,9 @@ _missions: dict[str, dict[str, Any]] = {}
 
 # ── WebSocket connections registry ──────────────────────────────────────────────
 _ws_connections: dict[str, list[WebSocket]] = {}
+
+# ── Global rate limiter ─────────────────────────────────────────────────────────
+_rate_limiter = RateLimiter(max_calls=100, window=60.0)
 
 
 # ── Pydantic Schemas ───────────────────────────────────────────────────────────
@@ -274,6 +278,8 @@ def create_app(
         tags=["Missions"],
     )
     async def create_mission(req: MissionRequest):
+        if not await _rate_limiter.check("create_mission"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
         mission_id = uuid.uuid4().hex[:12]
         plan = await _mission_planner.plan(
             objective=req.objective,
@@ -314,9 +320,10 @@ def create_app(
         tags=["Missions"],
     )
     async def list_missions():
-        items = []
-        for mid, m in _missions.items():
-            items.append(
+        if not await _rate_limiter.check("list_missions"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+        return MissionListResponse(
+            missions=[
                 MissionListItem(
                     mission_id=mid,
                     objective=m["objective"],
@@ -324,8 +331,9 @@ def create_app(
                     status=m["status"],
                     created_at=m["created_at"],
                 )
-            )
-        return MissionListResponse(missions=items)
+                for mid, m in _missions.items()
+            ]
+        )
 
     @app.get(
         "/api/v1/missions/{mission_id}",
@@ -333,6 +341,8 @@ def create_app(
         tags=["Missions"],
     )
     async def get_mission(mission_id: str):
+        if len(mission_id) != 12 or not mission_id.isalnum():
+            raise HTTPException(status_code=400, detail="Invalid mission_id format.")
         m = _missions.get(mission_id)
         if not m:
             raise HTTPException(status_code=404, detail="Mission not found")
@@ -348,6 +358,13 @@ def create_app(
         tags=["Missions"],
     )
     async def get_mission_report(mission_id: str, format: str = "json"):
+        if len(mission_id) != 12 or not mission_id.isalnum():
+            raise HTTPException(status_code=400, detail="Invalid mission_id format.")
+        if format not in ("json", "html", "sarif"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported format '{format}'. Use json, html, or sarif.",
+            )
         m = _missions.get(mission_id)
         if not m:
             raise HTTPException(status_code=404, detail="Mission not found")
@@ -390,6 +407,8 @@ def create_app(
         tags=["AI"],
     )
     async def ai_status():
+        if not await _rate_limiter.check("ai_status"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
         status = await _ai_router.initialize()
         providers = {
             str(p.type.value): {
@@ -410,6 +429,8 @@ def create_app(
         tags=["AI"],
     )
     async def ai_models():
+        if not await _rate_limiter.check("ai_models"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
         status = await _ai_router.initialize()
         models = [
             ModelInfoSchema(
@@ -430,6 +451,8 @@ def create_app(
         tags=["AI"],
     )
     async def ai_generate(req: GenerateRequest):
+        if not await _rate_limiter.check("ai_generate"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
         try:
             result = await _ai_router.generate(
                 prompt=req.prompt,
@@ -453,6 +476,8 @@ def create_app(
         tags=["Agents"],
     )
     async def list_agents():
+        if not await _rate_limiter.check("list_agents"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
         agents = _agent_registry.list_all()
         return AgentsResponse(
             agents=[
@@ -473,6 +498,8 @@ def create_app(
         tags=["Sandbox"],
     )
     async def sandbox_status():
+        if not await _rate_limiter.check("sandbox_status"):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded.")
         try:
             s: SandboxStatus = await _sandbox.status()
             return SandboxStatusSchema(
@@ -482,6 +509,7 @@ def create_app(
                 uptime=s.uptime_seconds,
             )
         except Exception:
+            logger.warning("Sandbox status check failed, returning fallback", exc_info=True)
             return SandboxStatusSchema(running=False, image="kalilinux/kali-rolling")
 
     # ── WebSocket ──────────────────────────────────────────────────────────
@@ -489,6 +517,11 @@ def create_app(
     @app.websocket("/api/v1/missions/{mission_id}/stream")
     async def mission_stream(websocket: WebSocket, mission_id: str):
         await websocket.accept()
+
+        if len(mission_id) != 12 or not mission_id.isalnum():
+            await websocket.send_json({"type": "error", "detail": "Invalid mission_id format."})
+            await websocket.close()
+            return
 
         if mission_id not in _missions:
             await websocket.send_json({"type": "error", "detail": "Mission not found"})

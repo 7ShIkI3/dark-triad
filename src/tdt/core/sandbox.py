@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 # ── Data Models ───────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(slots=True)
 class SandboxConfig:
     """Configuration for a single sandbox container."""
 
@@ -45,7 +46,7 @@ class SandboxConfig:
     privileged: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class SandboxStatus:
     """Snapshot of a sandbox container's runtime state."""
 
@@ -55,7 +56,7 @@ class SandboxStatus:
     uptime_seconds: float
 
 
-@dataclass
+@dataclass(slots=True)
 class ExecutionResult:
     """Result of a command executed inside the sandbox."""
 
@@ -281,7 +282,7 @@ class SandboxManager:
                 try:
                     await self.tmux.kill_session(session)
                 except Exception:
-                    pass
+                    logger.debug("Failed to kill tmux session '%s': ignoring", session)
 
         logger.info("Stopping sandbox container %s", container_id)
         stop_ok = await self._exec_docker_cli(
@@ -363,7 +364,10 @@ class SandboxManager:
                     timeout=10,
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to force-remove container %s in __del__",
+                    self._container_id,
+                )
 
     # ── Command Execution ─────────────────────────────────────────────────
 
@@ -683,7 +687,9 @@ class SandboxManager:
                 timeout=10,
             )
         except Exception:
-            pass
+            logger.warning(
+                "Cleanup in Machiavellian execution failed: ignoring", exc_info=True
+            )
 
         duration_ms = (time.monotonic() - start) * 1000
         return ExecutionResult(
@@ -827,8 +833,8 @@ class SandboxManager:
         start = time.monotonic()
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            proc = await asyncio.create_subprocess_exec(
+                *shlex.split(cmd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

@@ -46,7 +46,7 @@ class PhaseStatus(enum.Enum):
 # ── Rich Dataclasses ──────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(slots=True)
 class MissionPhase:
     """A single phase within a decomposed mission plan.
 
@@ -80,7 +80,7 @@ class MissionPhase:
             self.id = f"phase_{self.phase_number}"
 
 
-@dataclass
+@dataclass(slots=True)
 class MissionPlan:
     """Complete decomposed mission plan with phases, estimates, and metadata.
 

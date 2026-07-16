@@ -25,7 +25,7 @@ logger = structlog.get_logger(__name__)
 # ── Data Models ───────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(slots=True)
 class AgentStep:
     """A single step taken by an agent during execution."""
 
@@ -36,7 +36,7 @@ class AgentStep:
     duration_ms: float = 0.0
 
 
-@dataclass
+@dataclass(slots=True)
 class AgentResult:
     """Complete result of an agent's execution run."""
 

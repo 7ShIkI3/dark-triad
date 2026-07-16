@@ -217,12 +217,12 @@ class TestMissions:
         assert "phases" in data
 
     def test_mission_404(self, client):
-        resp = client.get("/api/v1/missions/nonexistent-id-12345")
+        resp = client.get("/api/v1/missions/abcdef123456")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Mission not found"
 
     def test_mission_report_404(self, client):
-        resp = client.get("/api/v1/missions/bad-id/report")
+        resp = client.get("/api/v1/missions/abcdef123456/report")
         assert resp.status_code == 404
 
     def test_create_mission_missing_objective_fails(self, client):

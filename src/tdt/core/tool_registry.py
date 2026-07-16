@@ -33,7 +33,7 @@ class ToolAffinity(Enum):
     AVOIDED = 0  # This personality avoids this tool
 
 
-@dataclass
+@dataclass(slots=True)
 class Tool:
     """A registered offensive tool."""
 

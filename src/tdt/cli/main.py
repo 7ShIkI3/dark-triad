@@ -139,7 +139,7 @@ async def _init_router_and_registry() -> tuple[AIRouter, AgentRegistry]:
     try:
         await router.initialize()
     except Exception:
-        pass  # non-blocking — status command handles unavailability
+        console.log("[yellow]AI router initialization deferred — status will show if unavailable[/yellow]")
 
     registry = AgentRegistry()
     return router, registry
@@ -183,6 +183,13 @@ ai_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(ai_app, name="ai")
+
+benchmark_app = typer.Typer(
+    name="benchmark",
+    help="Run and report on agent benchmark suites (XBOW, custom).",
+    no_args_is_help=True,
+)
+app.add_typer(benchmark_app, name="benchmark")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1207,6 +1214,89 @@ def _display_ai_status(router: AIRouter) -> None:
             f"Max Tier: [cyan]{hw.max_local_tier.value}[/cyan]"
         )
         console.print(Panel(hw_text, title="💻 Hardware", border_style="magenta"))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BENCHMARK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@benchmark_app.callback(invoke_without_command=True)
+def benchmark_callback(ctx: typer.Context) -> None:
+    """Run and inspect benchmark results."""
+    if ctx.invoked_subcommand is not None:
+        return
+    console.print(Panel("[dim]Usage: tdt benchmark run --suite xbow[/dim]", title="📊 Benchmark"))
+
+
+@benchmark_app.command("run")
+def benchmark_run(
+    suite: str = typer.Option(
+        "xbow",
+        "--suite",
+        "-s",
+        help="Benchmark suite to run: xbow, all",
+        show_default=True,
+    ),
+) -> None:
+    """Run a benchmark suite against agent personalities."""
+    async def _run() -> None:
+        from tdt.benchmark.runner import BenchmarkRunner
+
+        router, registry = await _init_router_and_registry()
+        sandbox = None  # sandbox optional for benchmarks
+
+        runner = BenchmarkRunner(ai_router=router, agent_registry=registry, sandbox=sandbox)
+
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as pbar:
+            pbar.add_task(description=f"Running {suite} benchmark...", total=None)
+            reports = await runner.run_all_benchmarks() if suite == "all" else {suite: await runner.run_xbow_benchmark()}
+
+        for name, report in reports.items():
+            t = Table(title=f"📊 {name.upper()} Benchmark", box=box.SIMPLE, header_style="bold cyan")
+            t.add_column("Metric", style="bold")
+            t.add_column("Value", justify="right")
+            t.add_row("Total", str(report.total_challenges))
+            t.add_row("Passed", f"[green]{report.passed}[/green]")
+            t.add_row("Failed", f"[red]{report.failed}[/red]")
+            t.add_row("Pass Rate", f"{report.pass_rate:.1f}%")
+            t.add_row("Avg Duration", f"{report.avg_duration_ms:.0f} ms")
+            console.print(t)
+
+            if report.by_difficulty:
+                dt = Table(title="By Difficulty", box=box.SIMPLE, header_style="bold")
+                dt.add_column("Difficulty", style="bold")
+                dt.add_column("Passed", justify="right")
+                dt.add_column("Total", justify="right")
+                dt.add_column("Rate", justify="right")
+                for diff, brk in sorted(report.by_difficulty.items()):
+                    dt.add_row(diff, str(brk.passed), str(brk.total), f"{brk.pass_rate:.0f}%")
+                console.print(dt)
+
+            if report.by_personality:
+                pt = Table(title="By Personality", box=box.SIMPLE, header_style="bold")
+                pt.add_column("Personality", style="bold")
+                pt.add_column("Passed", justify="right")
+                pt.add_column("Total", justify="right")
+                pt.add_column("Rate", justify="right")
+                pt.add_column("Avg ms", justify="right")
+                for pers, brk in sorted(report.by_personality.items()):
+                    pt.add_row(pers, str(brk.passed), str(brk.total), f"{brk.pass_rate:.0f}%", f"{brk.avg_duration:.0f}")
+                console.print(pt)
+
+    try:
+        asyncio.run(_run())
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        console.print(f"[red]Benchmark failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+
+@benchmark_app.command("report")
+def benchmark_report() -> None:
+    """Display the latest benchmark report."""
+    console.print(Panel("[yellow]⚠ No saved benchmark reports yet. Run [bold]tdt benchmark run[/bold] first.[/yellow]", title="📊 Benchmark Report"))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

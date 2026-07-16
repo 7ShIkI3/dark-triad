@@ -66,10 +66,20 @@ class AIRouterConfig:
     lmstudio_base_url: str = "http://localhost:1234/v1"
     llamacpp_base_url: str = "http://localhost:8080/v1"
 
+    def __repr__(self) -> str:
+        """Return a safe repr that masks API keys."""
+        fields = []
+        for k, v in self.__dict__.items():
+            if "api_key" in k and v is not None:
+                fields.append(f"{k}='****{v[-4:]}'")
+            else:
+                fields.append(f"{k}={v!r}")
+        return f"AIRouterConfig({', '.join(fields)})"
+
 
 # ── Status / Info dataclasses ─────────────────────────────────────────────────
 
-@dataclass
+@dataclass(slots=True)
 class ModelInfo:
     """Describes a single model available on a provider."""
 
@@ -83,7 +93,7 @@ class ModelInfo:
     _tier_order: int = field(default=0, repr=False, compare=False)
 
 
-@dataclass
+@dataclass(slots=True)
 class ProviderStatus:
     """Health and capabilities of a single provider."""
 
@@ -94,7 +104,7 @@ class ProviderStatus:
     latency_ms: float = 0.0
 
 
-@dataclass
+@dataclass(slots=True)
 class HardwareInfo:
     """Local hardware capabilities detected at runtime."""
 
@@ -112,7 +122,7 @@ class AIStatus:
     available_tiers: set[ModelTier] = field(default_factory=set)
 
 
-@dataclass
+@dataclass(slots=True)
 class GenerationResult:
     """Result of a single LLM generation call."""
 
