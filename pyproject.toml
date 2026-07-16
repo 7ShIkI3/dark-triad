@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dark-triad"
+version = "0.1.0"
+description = "The Dark Triad — an intelligence platform"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "The Dark Triad Contributors" },
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "httpx>=0.28.0",
+    "typer>=0.15.0",
+    "textual>=1.0.0",
+    "structlog>=24.4.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "networkx>=3.4.0",
+    "cryptography>=44.0.0",
+    "docker>=7.1.0",
+    "neo4j>=5.26.0",
+    "langgraph>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nousresearch/dark-triad"
+Repository = "https://github.com/nousresearch/dark-triad.git"
+
+[project.scripts]
+tdt = "tdt.cli.main:app"
+
+[tool.hatch.build.targets.sdist]
+include = ["/tdt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tdt"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true

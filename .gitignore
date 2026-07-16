@@ -1,0 +1,65 @@
+# Secrets & credentials
+.env
+*.key
+*.pem
+*.crt
+credentials/
+secrets/
+*.secret
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project internal
+.hermes/
+PLAN.md
+docs/audits/
+RAPPORT_AUDIT_*.md
+
+# Sandbox artifacts
+sandbox_data/
+tmp/
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Neo4j
+neo4j/data/
+neo4j/logs/
+
+# Reports (gitignored — export only)
+reports/*.html
+reports/*.pdf
+reports/*.sarif
+reports/*.json
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (dashboard)
+node_modules/
