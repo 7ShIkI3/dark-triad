@@ -7,13 +7,13 @@ from tdt.agents.ad_specialist import ADSpecialistAgent, DomainInfo, KerberoastTi
 from tdt.agents.base import AgentResult, AgentStep, BaseAgent
 from tdt.agents.evader import EvaderAgent, EvasionTechnique
 from tdt.agents.exploiter import ExploitAttempt, ExploiterAgent
-from tdt.agents.orchestrator import (
-    MissionPhase,
-    MissionPlan,
-    OrchestratorAgent,
-)
+from tdt.agents.orchestrator import OrchestratorAgent
 from tdt.agents.post_exploit import PersistenceMethod, PostExploitAgent
 from tdt.agents.recon import ReconAgent, ReconFindings
+from tdt.orchestrator.shared import (
+    MissionPhase,
+    MissionPlan,
+)
 
 __all__ = [
     # Base

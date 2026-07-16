@@ -443,9 +443,9 @@ class PatternLearner:
             entry["total_count"] += 1
             if success:
                 entry["success_count"] += 1
-            entry["personality_scores"][personality] = (
-                entry["personality_scores"].get(personality, 0) + (1 if success else 0)
-            )
+            entry["personality_scores"][personality] = entry["personality_scores"].get(
+                personality, 0
+            ) + (1 if success else 0)
             # Track best personality by raw success count
             best_p = max(entry["personality_scores"], key=lambda p: entry["personality_scores"][p])
             entry["best_personality"] = best_p

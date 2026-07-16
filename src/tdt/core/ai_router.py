@@ -23,12 +23,13 @@ logger = logging.getLogger(__name__)
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
+
 class ModelTier(enum.Enum):
     """Computational intensity tier for model selection."""
 
-    LIGHT = "light"       # Small/fast models (e.g. 7B, 8B)
-    MEDIUM = "medium"     # Mid-range (e.g. 14B, 30B)
-    HEAVY = "heavy"       # Large models (e.g. 70B, 120B+)
+    LIGHT = "light"  # Small/fast models (e.g. 7B, 8B)
+    MEDIUM = "medium"  # Mid-range (e.g. 14B, 30B)
+    HEAVY = "heavy"  # Large models (e.g. 70B, 120B+)
 
 
 class ProviderType(enum.Enum):
@@ -44,15 +45,16 @@ class ProviderType(enum.Enum):
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class AIRouterConfig:
     """Configuration for the AI Router."""
 
-    airgap: bool = False           # Block ALL cloud providers
-    prefer_local: bool = True      # Prefer Ollama/LMStudio/llamacpp over cloud
+    airgap: bool = False  # Block ALL cloud providers
+    prefer_local: bool = True  # Prefer Ollama/LMStudio/llamacpp over cloud
     prefer_uncensored: bool = True  # Prefer abliterated/uncensored models
     default_tier: ModelTier = ModelTier.MEDIUM
-    timeout: int = 120             # Per-request timeout in seconds
+    timeout: int = 120  # Per-request timeout in seconds
     max_retries: int = 3
 
     # Provider-specific overrides
@@ -78,6 +80,7 @@ class AIRouterConfig:
 
 
 # ── Status / Info dataclasses ─────────────────────────────────────────────────
+
 
 @dataclass(slots=True)
 class ModelInfo:
@@ -234,29 +237,17 @@ class AIRouter:
         scan_tasks: list[asyncio.Task[ProviderStatus | None]] = []
 
         # Always scan available providers
-        scan_tasks.append(
-            asyncio.create_task(self._scan_deepseek(), name="scan-deepseek")
-        )
-        scan_tasks.append(
-            asyncio.create_task(self._scan_ollama(), name="scan-ollama")
-        )
+        scan_tasks.append(asyncio.create_task(self._scan_deepseek(), name="scan-deepseek"))
+        scan_tasks.append(asyncio.create_task(self._scan_ollama(), name="scan-ollama"))
 
         # Cloud providers — only if not in airgap mode
         if not self.config.airgap:
-            scan_tasks.append(
-                asyncio.create_task(self._scan_openai(), name="scan-openai")
-            )
-            scan_tasks.append(
-                asyncio.create_task(self._scan_claude(), name="scan-claude")
-            )
+            scan_tasks.append(asyncio.create_task(self._scan_openai(), name="scan-openai"))
+            scan_tasks.append(asyncio.create_task(self._scan_claude(), name="scan-claude"))
 
         # Local providers (always scan — they're local)
-        scan_tasks.append(
-            asyncio.create_task(self._scan_lmstudio(), name="scan-lmstudio")
-        )
-        scan_tasks.append(
-            asyncio.create_task(self._scan_llamacpp(), name="scan-llamacpp")
-        )
+        scan_tasks.append(asyncio.create_task(self._scan_lmstudio(), name="scan-lmstudio"))
+        scan_tasks.append(asyncio.create_task(self._scan_llamacpp(), name="scan-llamacpp"))
 
         results: list[ProviderStatus | BaseException | None] = await asyncio.gather(
             *scan_tasks, return_exceptions=True
@@ -374,9 +365,7 @@ class AIRouter:
         if selected is None:
             selected = await self._bidirectional_fallback(tier)
         if selected is None:
-            raise RuntimeError(
-                f"No provider available for streaming tier {tier.value}."
-            )
+            raise RuntimeError(f"No provider available for streaming tier {tier.value}.")
 
         provider_type, model_info = selected
 
@@ -390,9 +379,7 @@ class AIRouter:
 
     # ── Provider selection ────────────────────────────────────────────────
 
-    async def _select_provider(
-        self, tier: ModelTier
-    ) -> tuple[ProviderType, ModelInfo] | None:
+    async def _select_provider(self, tier: ModelTier) -> tuple[ProviderType, ModelInfo] | None:
         """Select the best provider/model for *tier*.
 
         Priority:
@@ -541,12 +528,9 @@ class AIRouter:
                     name: str = m.get("name", m.get("model", ""))
                     tier = self._infer_tier(name)
                     uncensored = any(
-                        tag in name.lower()
-                        for tag in _UNCENSORED_MODELS.get("ollama", set())
+                        tag in name.lower() for tag in _UNCENSORED_MODELS.get("ollama", set())
                     )
-                    ctx = m.get("details", {}).get(
-                        "context_length", m.get("context_window", 4096)
-                    )
+                    ctx = m.get("details", {}).get("context_length", m.get("context_window", 4096))
                     models.append(
                         ModelInfo(
                             name=name,
@@ -751,15 +735,20 @@ class AIRouter:
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        resp = await self._http.post(  # type: ignore[union-attr]
-            url,
-            headers={
-                "Authorization": f"Bearer {self.config.deepseek_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
+        try:
+            resp = await self._http.post(  # type: ignore[union-attr]
+                url,
+                headers={
+                    "Authorization": f"Bearer {self.config.deepseek_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"DeepSeek API error {exc.response.status_code}: {exc.response.text}"
+            ) from exc
         data = resp.json()
 
         choice = data["choices"][0]
@@ -803,8 +792,13 @@ class AIRouter:
         if json_mode:
             payload["format"] = "json"
 
-        resp = await self._http.post(url, json=payload)  # type: ignore[union-attr]
-        resp.raise_for_status()
+        try:
+            resp = await self._http.post(url, json=payload)  # type: ignore[union-attr]
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Ollama API error {exc.response.status_code}: {exc.response.text}"
+            ) from exc
         data = resp.json()
 
         tokens_used = 0
@@ -843,8 +837,14 @@ class AIRouter:
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
-        resp = await self._http.post(url, json=payload)  # type: ignore[union-attr]
-        resp.raise_for_status()
+        try:
+            resp = await self._http.post(url, json=payload)  # type: ignore[union-attr]
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"OpenAI-compatible API error at {url}: "
+                f"{exc.response.status_code}: {exc.response.text}"
+            ) from exc
         data = resp.json()
 
         choice = data["choices"][0]

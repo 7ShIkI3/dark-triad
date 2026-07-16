@@ -90,6 +90,7 @@ class GenerationResult:
 def detect_hardware() -> HardwareInfo:
     """Detect local hardware capabilities."""
     import platform as _platform
+
     return HardwareInfo(
         cpu_count=os.cpu_count() or 4,
         ram_gb=round(psutil_virtual_memory().total / (1024**3), 1) if HAS_PSUTIL else 8.0,
@@ -266,9 +267,7 @@ class TestAIStatus:
 
 class TestGenerationResult:
     def test_success_default(self):
-        result = GenerationResult(
-            text="Hello", provider=ProviderType.LOCAL, model="test-model"
-        )
+        result = GenerationResult(text="Hello", provider=ProviderType.LOCAL, model="test-model")
         assert result.text == "Hello"
         assert result.success is True
         assert result.error == ""

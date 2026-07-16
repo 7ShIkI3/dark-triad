@@ -130,9 +130,7 @@ class TmuxSessionManager:
     async def send_command(self, session: str, command: str) -> None:
         """Send a command string to the tmux session."""
         escaped = command.replace("'", "'\\''")
-        result = await self._exec(
-            f"tmux send-keys -t {session} '{escaped}' Enter 2>&1"
-        )
+        result = await self._exec(f"tmux send-keys -t {session} '{escaped}' Enter 2>&1")
         if result.exit_code != 0:
             raise RuntimeError(
                 f"Failed to send command to tmux session '{session}': {result.stderr}"
@@ -140,18 +138,14 @@ class TmuxSessionManager:
 
     async def capture_output(self, session: str) -> str:
         """Capture the current visible output of the tmux session."""
-        result = await self._exec(
-            f"tmux capture-pane -t {session} -p -S - 2>&1"
-        )
+        result = await self._exec(f"tmux capture-pane -t {session} -p -S - 2>&1")
         if result.exit_code != 0:
             raise RuntimeError(
                 f"Failed to capture output from tmux session '{session}': {result.stderr}"
             )
         return result.stdout
 
-    async def wait_for_prompt(
-        self, session: str, prompt_pattern: str, timeout: int = 30
-    ) -> bool:
+    async def wait_for_prompt(self, session: str, prompt_pattern: str, timeout: int = 30) -> bool:
         """Wait until the prompt pattern appears in session output.
 
         Args:
@@ -180,9 +174,7 @@ class TmuxSessionManager:
         result = await self._exec(f"tmux kill-session -t {session} 2>&1")
         self._sessions.pop(session, None)
         if result.exit_code != 0 and "no server running" not in result.stderr:
-            logger.warning(
-                "Failed to kill tmux session '%s': %s", session, result.stderr
-            )
+            logger.warning("Failed to kill tmux session '%s': %s", session, result.stderr)
 
 
 # ── Sandbox Manager ───────────────────────────────────────────────────────────
@@ -263,9 +255,7 @@ class SandboxManager:
         self.tmux = TmuxSessionManager(self._exec_internal)
 
         status = await self.status()
-        logger.info(
-            "Sandbox ready: container=%s image=%s", status.container_id, status.image
-        )
+        logger.info("Sandbox ready: container=%s image=%s", status.container_id, status.image)
         return status
 
     async def stop(self) -> None:
@@ -285,16 +275,12 @@ class SandboxManager:
                     logger.debug("Failed to kill tmux session '%s': ignoring", session)
 
         logger.info("Stopping sandbox container %s", container_id)
-        stop_ok = await self._exec_docker_cli(
-            f"docker stop --time=10 {container_id} 2>&1"
-        )
+        stop_ok = await self._exec_docker_cli(f"docker stop --time=10 {container_id} 2>&1")
         if stop_ok.exit_code != 0:
             logger.warning("docker stop warning: %s", stop_ok.stderr)
 
         if self.config.auto_cleanup:
-            rm_ok = await self._exec_docker_cli(
-                f"docker rm -f {container_id} 2>&1"
-            )
+            rm_ok = await self._exec_docker_cli(f"docker rm -f {container_id} 2>&1")
             if rm_ok.exit_code != 0:
                 logger.warning("docker rm warning: %s", rm_ok.stderr)
 
@@ -320,9 +306,7 @@ class SandboxManager:
         inspect_result = await self._exec_docker_cli(
             f"docker inspect --format='{{{{.State.Running}}}}' {self._container_id} 2>&1"
         )
-        running = (
-            inspect_result.exit_code == 0 and inspect_result.stdout.strip() == "true"
-        )
+        running = inspect_result.exit_code == 0 and inspect_result.stdout.strip() == "true"
 
         return SandboxStatus(
             running=running,
@@ -386,9 +370,7 @@ class SandboxManager:
 
         return await self._exec_internal(command, timeout)
 
-    async def execute_interactive(
-        self, commands: list[str], timeout: int = 300
-    ) -> ExecutionResult:
+    async def execute_interactive(self, commands: list[str], timeout: int = 300) -> ExecutionResult:
         """Execute multiple commands sequentially in a persistent tmux session.
 
         Creates a dedicated tmux session, sends each command, waits for
@@ -430,9 +412,7 @@ class SandboxManager:
                     timeout=int(min(cmd_timeout, 30)),
                 )
                 if not found:
-                    logger.warning(
-                        "Prompt not detected after command %d, continuing anyway", i
-                    )
+                    logger.warning("Prompt not detected after command %d, continuing anyway", i)
 
             output = await self.tmux.capture_output(session_name)
             all_output.append(output)
@@ -459,13 +439,9 @@ class SandboxManager:
         import base64
 
         encoded = base64.b64encode(content.encode()).decode()
-        result = await self._exec_internal(
-            f"echo '{encoded}' | base64 -d > '{path}'"
-        )
+        result = await self._exec_internal(f"echo '{encoded}' | base64 -d > '{path}'")
         if result.exit_code != 0:
-            raise SandboxError(
-                f"Failed to write file '{path}': {result.stderr}"
-            )
+            raise SandboxError(f"Failed to write file '{path}': {result.stderr}")
 
     async def read_file(self, path: str) -> str:
         """Read a file from inside the container.
@@ -476,9 +452,7 @@ class SandboxManager:
 
         result = await self._exec_internal(f"base64 '{path}' 2>&1")
         if result.exit_code != 0:
-            raise SandboxError(
-                f"Failed to read file '{path}': {result.stderr}"
-            )
+            raise SandboxError(f"Failed to read file '{path}': {result.stderr}")
         return base64.b64decode(result.stdout.strip()).decode()
 
     # ── Tool Installation ─────────────────────────────────────────────────
@@ -497,9 +471,7 @@ class SandboxManager:
             timeout=120,
         )
         if result.exit_code != 0:
-            logger.error(
-                "Failed to install tool '%s': %s", tool, result.stderr
-            )
+            logger.error("Failed to install tool '%s': %s", tool, result.stderr)
             return False
         return True
 
@@ -538,9 +510,7 @@ class SandboxManager:
             return await self._execute_machiavellianism(commands, params)
         else:
             # Fallback: execute_interactive with profile timeout
-            return await self.execute_interactive(
-                commands, timeout=params["timeout"]
-            )
+            return await self.execute_interactive(commands, timeout=params["timeout"])
 
     def _personality_from_name(self, name: str) -> PersonalityProfile:
         """Resolve a personality name to a profile."""
@@ -555,10 +525,7 @@ class SandboxManager:
         normalized = name.strip().lower()
         profile = mapping.get(normalized)
         if not profile:
-            raise ValueError(
-                f"Unknown personality '{name}'. "
-                f"Available: {', '.join(mapping)}"
-            )
+            raise ValueError(f"Unknown personality '{name}'. Available: {', '.join(mapping)}")
         return profile
 
     @staticmethod
@@ -687,9 +654,7 @@ class SandboxManager:
                 timeout=10,
             )
         except Exception:
-            logger.warning(
-                "Cleanup in Machiavellian execution failed: ignoring", exc_info=True
-            )
+            logger.warning("Cleanup in Machiavellian execution failed: ignoring", exc_info=True)
 
         duration_ms = (time.monotonic() - start) * 1000
         return ExecutionResult(
@@ -726,11 +691,16 @@ class SandboxManager:
         """Create the sandbox container. Returns container ID or None."""
         # Build docker run args from config
         args = [
-            "docker", "create",
-            "--network", self.config.network_mode,
-            "--memory", self.config.memory_limit,
-            "--cpus", str(self.config.cpu_limit),
-            "--name", f"tdt-sandbox-{int(time.time())}",
+            "docker",
+            "create",
+            "--network",
+            self.config.network_mode,
+            "--memory",
+            self.config.memory_limit,
+            "--cpus",
+            str(self.config.cpu_limit),
+            "--name",
+            f"tdt-sandbox-{int(time.time())}",
         ]
 
         if self.config.privileged:
@@ -761,9 +731,7 @@ class SandboxManager:
 
     async def _start_container(self, container_id: str) -> None:
         """Start a created container."""
-        result = await self._exec_docker_cli(
-            f"docker start {container_id} 2>&1"
-        )
+        result = await self._exec_docker_cli(f"docker start {container_id} 2>&1")
         if result.exit_code != 0:
             raise SandboxError(f"Failed to start container: {result.stderr}")
 
@@ -780,9 +748,7 @@ class SandboxManager:
             await asyncio.sleep(1)
         return False
 
-    async def _exec_internal(
-        self, command: str, timeout: int = 60
-    ) -> ExecutionResult:
+    async def _exec_internal(self, command: str, timeout: int = 60) -> ExecutionResult:
         """Execute a command inside the container using docker exec.
 
         Uses subprocess to run 'docker exec' — no shell=True (command
@@ -822,9 +788,7 @@ class SandboxManager:
             timed_out=duration_ms >= timeout * 1000,
         )
 
-    async def _exec_docker_cli(
-        self, cmd: str, timeout: int = 60
-    ) -> ExecutionResult:
+    async def _exec_docker_cli(self, cmd: str, timeout: int = 60) -> ExecutionResult:
         """Execute a docker CLI command via subprocess.
 
         This is a stub that wraps subprocess for non-Docker environments.

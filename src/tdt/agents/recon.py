@@ -75,9 +75,7 @@ class ReconAgent(BaseAgent):
     ) -> None:
         super().__init__(name, personality, ai_router, sandbox)
 
-    async def execute(
-        self, objective: str, context: dict | None = None
-    ) -> AgentResult:
+    async def execute(self, objective: str, context: dict | None = None) -> AgentResult:
         """Execute a reconnaissance mission.
 
         1. Select recon tools via ToolRegistry.list_for_personality()
@@ -97,9 +95,7 @@ class ReconAgent(BaseAgent):
         s1 = AgentStep(step_number=step_num, action="select_tools")
         steps.append(s1)
         try:
-            tools = ToolRegistry.list_for_personality(
-                self._tool_personality(persona)
-            )
+            tools = ToolRegistry.list_for_personality(self._tool_personality(persona))
             recon_tools = [t for t in tools if t.category == ToolCategory.RECON]
             s1.tool = ", ".join(t.name for t in recon_tools)
             s1.result = f"{len(recon_tools)} recon tools available"
@@ -110,8 +106,7 @@ class ReconAgent(BaseAgent):
 
         # ── Step 2: Passive recon ───────────────────────────────────────
         step_num += 1
-        s2 = AgentStep(step_number=step_num, action="passive_recon",
-                       tool="passive_recon")
+        s2 = AgentStep(step_number=step_num, action="passive_recon", tool="passive_recon")
         steps.append(s2)
         try:
             passive_data = await self.passive_recon(objective)
@@ -119,7 +114,7 @@ class ReconAgent(BaseAgent):
             findings.ssl_info = passive_data.get("ssl")
             findings.whois = passive_data.get("whois")
             dns_count = len(findings.dns_records)
-            ssl_status = 'yes' if findings.ssl_info else 'no'
+            ssl_status = "yes" if findings.ssl_info else "no"
             s2.result = f"DNS={dns_count} records, SSL={ssl_status}"
             s2.duration_ms = (time.monotonic() - start) * 1000
         except Exception as e:
@@ -129,18 +124,14 @@ class ReconAgent(BaseAgent):
         # ── Step 3: Active scan ─────────────────────────────────────────
         step_num += 1
         ports = ctx.get("ports", self._get_ports_for_personality(persona))
-        s3 = AgentStep(step_number=step_num, action="active_scan",
-                       tool="nmap")
+        s3 = AgentStep(step_number=step_num, action="active_scan", tool="nmap")
         steps.append(s3)
         try:
             scan_data = await self.active_scan(objective, ports)
             findings.open_ports = scan_data.get("open_ports", [])
             findings.services = scan_data.get("services", {})
             findings.os_guess = scan_data.get("os_guess", "unknown")
-            s3.result = (
-                f"{len(findings.open_ports)} open ports, "
-                f"OS={findings.os_guess}"
-            )
+            s3.result = f"{len(findings.open_ports)} open ports, OS={findings.os_guess}"
             s3.duration_ms = (time.monotonic() - start) * 1000
         except Exception as e:
             s3.result = f"Failed: {e}"
@@ -216,9 +207,7 @@ class ReconAgent(BaseAgent):
 
     # ── Active Scan ──────────────────────────────────────────────────────
 
-    async def active_scan(
-        self, target: str, ports: str | None = None
-    ) -> dict:
+    async def active_scan(self, target: str, ports: str | None = None) -> dict:
         """Run an nmap scan against the target via sandbox."""
         self._log.info("active_scan_start", target=target, ports=ports)
         nmap_args = self._build_nmap_args(ports)
@@ -234,8 +223,7 @@ class ReconAgent(BaseAgent):
             return f"-T5 -p- -O -sV --open {ports or ''}".strip()
         if persona == "psychopathy":
             return (
-                f"-T5 -p- -O -sV -sC -sS -sU "
-                f"--min-rate 10000 --max-retries 5 {ports or ''}"
+                f"-T5 -p- -O -sV -sC -sS -sU --min-rate 10000 --max-retries 5 {ports or ''}"
             ).strip()
         return (
             f"-T2 -p {ports or '22,80,443,8080,8443'} "
@@ -260,16 +248,21 @@ class ReconAgent(BaseAgent):
             open_ports = [22, 80, 443]
 
         port_service_map = {
-            22: "ssh", 80: "http", 443: "https",
-            8080: "http-proxy", 8443: "https-alt",
-            3306: "mysql", 3389: "ms-wbt-server",
-            5900: "vnc", 6379: "redis", 27017: "mongod",
+            22: "ssh",
+            80: "http",
+            443: "https",
+            8080: "http-proxy",
+            8443: "https-alt",
+            3306: "mysql",
+            3389: "ms-wbt-server",
+            5900: "vnc",
+            6379: "redis",
+            27017: "mongod",
         }
         return {
             "cmd": cmd,
             "open_ports": open_ports,
-            "services": {str(p): port_service_map[p]
-                         for p in open_ports if p in port_service_map},
+            "services": {str(p): port_service_map[p] for p in open_ports if p in port_service_map},
             "os_guess": "Linux 5.x (stub)",
             "raw_output": f"Stub nmap output for {cmd}",
         }

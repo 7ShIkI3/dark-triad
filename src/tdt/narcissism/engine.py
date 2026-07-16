@@ -10,6 +10,7 @@ The Narcissus agent:
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -482,31 +483,35 @@ class NarcissusEngine:
     def _build_command(tool_name: str, objective: str) -> str:
         """Translate a tool name + objective into a shell command.
 
+        All user-supplied input (``objective``) is shell-quoted via
+        :func:`shlex.quote` to prevent command injection.
+
         For now this is a straightforward mapping. In production the AI
         router would generate the actual command.
         """
+        quoted = shlex.quote(objective)
         cmd_map: dict[str, str] = {
             # RECON
-            "nmap_scan": f"nmap -sV -sC -Pn --min-rate=5000 -T5 {objective} 2>&1",
-            "passive_recon": f"echo '[PASSIVE RECON] {objective}' 2>&1",
+            "nmap_scan": f"nmap -sV -sC -Pn --min-rate=5000 -T5 {quoted} 2>&1",
+            "passive_recon": f"echo '[PASSIVE RECON]' {quoted} 2>&1",
             # EXPLOIT
-            "nuclei_scan": f"nuclei -u {objective} -severity critical,high -rate-limit 300 2>&1",
-            "custom_exploit": f"echo '[CUSTOM EXPLOIT] Launching against {objective}' 2>&1",
+            "nuclei_scan": f"nuclei -u {quoted} -severity critical,high -rate-limit 300 2>&1",
+            "custom_exploit": f"echo '[CUSTOM EXPLOIT] Launching against' {quoted} 2>&1",
             # CREDENTIAL
-            "hashdump": f"echo '[HASHDUMP] Dumping credentials for {objective}' 2>&1",
-            "kerberoast": f"echo '[KERBEROAST] Requesting service tickets for {objective}' 2>&1",
+            "hashdump": f"echo '[HASHDUMP] Dumping credentials for' {quoted} 2>&1",
+            "kerberoast": f"echo '[KERBEROAST] Requesting service tickets for' {quoted} 2>&1",
             # LATERAL
-            "psexec": f"echo '[PSEXEC] Lateral movement to {objective}' 2>&1",
-            "wmi_exec": f"echo '[WMI EXEC] Remote execution on {objective}' 2>&1",
+            "psexec": f"echo '[PSEXEC] Lateral movement to' {quoted} 2>&1",
+            "wmi_exec": f"echo '[WMI EXEC] Remote execution on' {quoted} 2>&1",
             # EVASION
-            "obfuscate_payload": f"echo '[OBFUSCATE] Payload mutation for {objective}' 2>&1",
+            "obfuscate_payload": f"echo '[OBFUSCATE] Payload mutation for' {quoted} 2>&1",
             # C2
-            "sliver_deploy": f"echo '[SLIVER] Deploying implant to {objective}' 2>&1",
-            "havoc_deploy": f"echo '[HAVOC] Deploying Demon to {objective}' 2>&1",
+            "sliver_deploy": f"echo '[SLIVER] Deploying implant to' {quoted} 2>&1",
+            "havoc_deploy": f"echo '[HAVOC] Deploying Demon to' {quoted} 2>&1",
             # EXFIL
-            "stealth_exfil": f"echo '[STEALTH EXFIL] Tunneling from {objective}' 2>&1",
+            "stealth_exfil": f"echo '[STEALTH EXFIL] Tunneling from' {quoted} 2>&1",
             # DECEPTION
-            "deploy_honeypot": f"echo '[HONEYPOT] Deploying decoy on {objective}' 2>&1",
+            "deploy_honeypot": f"echo '[HONEYPOT] Deploying decoy on' {quoted} 2>&1",
         }
 
         command = cmd_map.get(tool_name)
@@ -514,4 +519,4 @@ class NarcissusEngine:
             return command
 
         # Unknown tool — use generic command with tool name as prefix
-        return f"echo '[{tool_name.upper()}] Executing against {objective}' 2>&1"
+        return f"echo '[{tool_name.upper()}] Executing against' {quoted} 2>&1"

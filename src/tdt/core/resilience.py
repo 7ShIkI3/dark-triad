@@ -196,9 +196,7 @@ class CircuitBreaker:
             await self._on_failure()
         # Do NOT suppress the exception — let it propagate
 
-    def __call__(
-        self, func: Callable[P, Awaitable[R]]
-    ) -> Callable[P, Awaitable[R]]:
+    def __call__(self, func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
         """Decorate *func* with circuit-breaker protection."""
 
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -226,15 +224,12 @@ class CircuitBreaker:
                     return
 
                 raise CircuitBreakerOpenError(
-                    f"Circuit '{self.name}' is OPEN. "
-                    f"Retry in {self.reset_timeout - elapsed:.1f}s"
+                    f"Circuit '{self.name}' is OPEN. Retry in {self.reset_timeout - elapsed:.1f}s"
                 )
 
             # HALF_OPEN — only a single probe is allowed; concurrent callers
             # are blocked so that the probe stays uncontested.
-            raise CircuitBreakerOpenError(
-                f"Circuit '{self.name}' is HALF_OPEN. Probe in progress."
-            )
+            raise CircuitBreakerOpenError(f"Circuit '{self.name}' is HALF_OPEN. Probe in progress.")
 
     def _on_success(self) -> None:
         """Record a successful call and reset to CLOSED if currently HALF_OPEN."""
@@ -392,8 +387,8 @@ def graceful_shutdown(*signals: signal.Signals) -> GracefulShutdown:
 
 
 async def health_check(
-    ai_router: Any = None,         # tdt.core.ai_router.AIRouter instance
-    sandbox: Any = None,           # tdt.core.sandbox.SandboxManager instance
+    ai_router: Any = None,  # tdt.core.ai_router.AIRouter instance
+    sandbox: Any = None,  # tdt.core.sandbox.SandboxManager instance
     api_port: int = 8000,
     http_client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
@@ -446,9 +441,7 @@ async def health_check(
                         else {}
                     ),
                     "error": (
-                        None
-                        if ai_ok
-                        else "AIRouter not initialised — call initialize() first"
+                        None if ai_ok else "AIRouter not initialised — call initialize() first"
                     ),
                 }
             except Exception as exc:
@@ -476,11 +469,7 @@ async def health_check(
                         "image": sb_status.image,
                         "uptime_seconds": round(sb_status.uptime_seconds, 1),
                     },
-                    "error": (
-                        None
-                        if sb_status.running
-                        else "Sandbox container is not running"
-                    ),
+                    "error": (None if sb_status.running else "Sandbox container is not running"),
                 }
             except Exception as exc:
                 components["sandbox"] = {
@@ -507,11 +496,7 @@ async def health_check(
                     "status_code": resp.status_code,
                     "response": resp.json() if api_ok else resp.text[:200],
                 },
-                "error": (
-                    None
-                    if api_ok
-                    else f"API returned HTTP {resp.status_code}"
-                ),
+                "error": (None if api_ok else f"API returned HTTP {resp.status_code}"),
             }
         except httpx.ConnectError as exc:
             components["api"] = {
@@ -531,8 +516,7 @@ async def health_check(
             await client.aclose()
 
     overall_ok = all(
-        comp.get("ok") is True or comp.get("ok") is None
-        for comp in components.values()
+        comp.get("ok") is True or comp.get("ok") is None for comp in components.values()
     )
 
     return {

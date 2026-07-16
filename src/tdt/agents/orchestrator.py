@@ -8,43 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
 
 import structlog
 
 from tdt.agents.base import AgentResult, AgentStep, BaseAgent
 from tdt.core.ai_router import AIRouter, ModelTier
-from tdt.core.personality import (
-    PersonalityProfile,
-)
+from tdt.core.personality import PersonalityProfile
 from tdt.core.sandbox import SandboxManager
 from tdt.core.tool_registry import ToolRegistry
+from tdt.orchestrator.shared import MissionPhase, MissionPlan
 
 logger = structlog.get_logger(__name__)
-
-
-# ── Shared Dataclasses ─────────────────────────────────────────────────────────
-
-
-@dataclass
-class MissionPhase:
-    """A single phase within a mission plan."""
-
-    phase_num: int
-    name: str
-    agent: str  # which agent category handles this phase
-    task: str   # objective for this phase
-    depends_on: list[str] = field(default_factory=list)
-
-
-@dataclass
-class MissionPlan:
-    """Complete mission plan decomposed from an objective."""
-
-    objective: str
-    phases: list[MissionPhase] = field(default_factory=list)
-    estimated_duration: str = "unknown"
-    risk_level: str = "medium"  # low | medium | high | critical
 
 
 class OrchestratorAgent(BaseAgent):
@@ -68,9 +42,7 @@ class OrchestratorAgent(BaseAgent):
     ) -> None:
         super().__init__(name, personality, ai_router, sandbox)
 
-    async def execute(
-        self, objective: str, context: dict | None = None
-    ) -> AgentResult:
+    async def execute(self, objective: str, context: dict | None = None) -> AgentResult:
         """Full orchestration lifecycle: analyse → plan → dispatch → aggregate.
 
         1. Uses AIRouter to analyse the objective.
@@ -110,7 +82,9 @@ class OrchestratorAgent(BaseAgent):
 
         if not plan.phases:
             return self._build_result(
-                steps, objective, error="Mission plan has zero phases",
+                steps,
+                objective,
+                error="Mission plan has zero phases",
             )
 
         # ── Step 3: Dispatch phases ─────────────────────────────────────
@@ -125,9 +99,12 @@ class OrchestratorAgent(BaseAgent):
             s3.duration_ms = (time.monotonic() - start) * 1000
         except Exception as e:
             s3.result = f"Failed: {e}"
-            plan_data = plan.asdict() if hasattr(plan, 'asdict') else str(plan)
+            plan_data = plan.asdict() if hasattr(plan, "asdict") else str(plan)
             return self._build_result(
-                steps, objective, data={"plan": plan_data},
+                steps,
+                objective,
+                data={"plan": plan_data},
+                error=str(e),
             )
 
         # ── Step 4: Aggregate ───────────────────────────────────────────
@@ -155,9 +132,7 @@ class OrchestratorAgent(BaseAgent):
 
     # ── Mission Planning ─────────────────────────────────────────────────
 
-    async def plan_mission(
-        self, objective: str, context: dict | None = None
-    ) -> MissionPlan:
+    async def plan_mission(self, objective: str, context: dict | None = None) -> MissionPlan:
         """Create a personality-tailored mission plan."""
         ctx = context or {}
         persona = self.personality.mode.value
@@ -174,12 +149,15 @@ class OrchestratorAgent(BaseAgent):
             objective=objective,
             phases=[
                 MissionPhase(
-                    phase_num=1, name="full_assault",
-                    agent=self.name, task=objective, depends_on=[],
+                    phase_number=1,
+                    name="full_assault",
+                    agent_name=self.name,
+                    objective=objective,
+                    depends_on=[],
                 ),
             ],
-            estimated_duration="< 30s",
-            risk_level="high",
+            estimated_duration=30,
+            risk_level=0.85,
         )
 
     def _plan_psychopath(self, objective: str) -> MissionPlan:
@@ -188,56 +166,72 @@ class OrchestratorAgent(BaseAgent):
             objective=objective,
             phases=[
                 MissionPhase(
-                    phase_num=i + 1,
+                    phase_number=i + 1,
                     name=f"parallel_{t.category.value}_{t.name}",
-                    agent=t.category.value,
-                    task=f"Run {t.name} against {objective}",
+                    agent_name=t.category.value,
+                    objective=f"Run {t.name} against {objective}",
                     depends_on=[],
                 )
                 for i, t in enumerate(tools)
             ],
-            estimated_duration="< 2min",
-            risk_level="critical",
+            estimated_duration=120,
+            risk_level=0.95,
         )
 
     def _plan_machiavelli(self, objective: str) -> MissionPlan:
         return MissionPlan(
             objective=objective,
             phases=[
-                MissionPhase(phase_num=1, name="passive_recon",
-                             agent="recon",
-                             task=f"Passive reconnaissance on {objective}",
-                             depends_on=[]),
-                MissionPhase(phase_num=2, name="active_scan",
-                             agent="recon",
-                             task=f"Active port/service scan on {objective}",
-                             depends_on=["passive_recon"]),
-                MissionPhase(phase_num=3, name="vulnerability_analysis",
-                             agent="recon",
-                             task=f"Vulnerability analysis for {objective}",
-                             depends_on=["active_scan"]),
-                MissionPhase(phase_num=4, name="exploit_selection",
-                             agent="exploit",
-                             task=f"Select exploit for {objective}",
-                             depends_on=["vulnerability_analysis"]),
-                MissionPhase(phase_num=5, name="exploit_execution",
-                             agent="exploit",
-                             task=f"Run exploit against {objective}",
-                             depends_on=["exploit_selection"]),
-                MissionPhase(phase_num=6, name="post_exploit_verify",
-                             agent="exploit",
-                             task=f"Verify exploitation on {objective}",
-                             depends_on=["exploit_execution"]),
+                MissionPhase(
+                    phase_number=1,
+                    name="passive_recon",
+                    agent_name="recon",
+                    objective=f"Passive reconnaissance on {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=2,
+                    name="active_scan",
+                    agent_name="recon",
+                    objective=f"Active port/service scan on {objective}",
+                    depends_on=["passive_recon"],
+                ),
+                MissionPhase(
+                    phase_number=3,
+                    name="vulnerability_analysis",
+                    agent_name="recon",
+                    objective=f"Vulnerability analysis for {objective}",
+                    depends_on=["active_scan"],
+                ),
+                MissionPhase(
+                    phase_number=4,
+                    name="exploit_selection",
+                    agent_name="exploit",
+                    objective=f"Select exploit for {objective}",
+                    depends_on=["vulnerability_analysis"],
+                ),
+                MissionPhase(
+                    phase_number=5,
+                    name="exploit_execution",
+                    agent_name="exploit",
+                    objective=f"Run exploit against {objective}",
+                    depends_on=["exploit_selection"],
+                ),
+                MissionPhase(
+                    phase_number=6,
+                    name="post_exploit_verify",
+                    agent_name="exploit",
+                    objective=f"Verify exploitation on {objective}",
+                    depends_on=["exploit_execution"],
+                ),
             ],
-            estimated_duration="5-15min",
-            risk_level="low",
+            estimated_duration=600,
+            risk_level=0.35,
         )
 
     # ── Dispatch ─────────────────────────────────────────────────────────
 
-    async def dispatch(
-        self, phase: str, agent_name: str, task: str
-    ) -> AgentResult:
+    async def dispatch(self, phase: str, agent_name: str, task: str) -> AgentResult:
         """Stub: dispatch a sub-task to a specialist agent.
 
         Phase 4 will route through actual inter-agent communication.
@@ -251,7 +245,8 @@ class OrchestratorAgent(BaseAgent):
             output=f"Stub dispatch: {agent_name} → {task}",
             steps=[
                 AgentStep(
-                    step_number=1, action="dispatch",
+                    step_number=1,
+                    action="dispatch",
                     tool=agent_name,
                     result=f"phase={phase}, task={task}",
                 )
@@ -259,7 +254,9 @@ class OrchestratorAgent(BaseAgent):
         )
 
     async def _execute_plan(
-        self, plan: MissionPlan, context: dict,
+        self,
+        plan: MissionPlan,
+        context: dict,
     ) -> dict[str, AgentResult]:
         """Execute all phases respecting dependency ordering."""
         persona = context.get("personality", self.personality.mode.value)
@@ -268,18 +265,16 @@ class OrchestratorAgent(BaseAgent):
 
         if persona == "psychopathy":
             tasks = {
-                p.name: asyncio.create_task(
-                    self.dispatch(p.name, p.agent, p.task)
-                )
+                p.name: asyncio.create_task(self.dispatch(p.name, p.agent_name, p.objective))
                 for p in plan.phases
             }
             done = await asyncio.gather(*tasks.values(), return_exceptions=True)
             for name, result in zip(tasks, done):
                 if isinstance(result, BaseException):
                     results[name] = AgentResult(
-                        agent_name=phase_map[name].agent,
+                        agent_name=phase_map[name].agent_name,
                         personality=self.personality_mode,
-                        objective=phase_map[name].task,
+                        objective=phase_map[name].objective,
                         success=False,
                         output=f"Exception: {result}",
                         steps=[],
@@ -292,37 +287,33 @@ class OrchestratorAgent(BaseAgent):
         remaining = list(plan.phases)
 
         while remaining:
-            batch = [
-                p for p in remaining
-                if all(dep in executed for dep in p.depends_on)
-            ]
+            batch = [p for p in remaining if all(dep in executed for dep in p.depends_on)]
             if not batch:
                 batch = [remaining[0]]
-                self._log.warning("dependency_deadlock", phase=batch[0].name,
-                                  waits=batch[0].depends_on)
+                self._log.warning(
+                    "dependency_deadlock", phase=batch[0].name, waits=batch[0].depends_on
+                )
 
             for phase in batch:
                 remaining.remove(phase)
 
             if persona == "narcissism":
                 for phase in batch:
-                    result = await self.dispatch(phase.name, phase.agent, phase.task)
+                    result = await self.dispatch(phase.name, phase.agent_name, phase.objective)
                     results[phase.name] = result
                     executed.add(phase.name)
             else:
                 tasks = {
-                    p.name: asyncio.create_task(
-                        self.dispatch(p.name, p.agent, p.task)
-                    )
+                    p.name: asyncio.create_task(self.dispatch(p.name, p.agent_name, p.objective))
                     for p in batch
                 }
                 done = await asyncio.gather(*tasks.values(), return_exceptions=True)
                 for name, result in zip(tasks, done):
                     if isinstance(result, BaseException):
                         results[name] = AgentResult(
-                            agent_name=phase_map[name].agent,
+                            agent_name=phase_map[name].agent_name,
                             personality=self.personality_mode,
-                            objective=phase_map[name].task,
+                            objective=phase_map[name].objective,
                             success=False,
                             output=f"Exception: {result}",
                             steps=[],
@@ -335,9 +326,7 @@ class OrchestratorAgent(BaseAgent):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
-    def _aggregate(
-        self, plan: MissionPlan, results: dict[str, AgentResult]
-    ) -> dict:
+    def _aggregate(self, plan: MissionPlan, results: dict[str, AgentResult]) -> dict:
         total = len(plan.phases)
         succeeded = sum(1 for r in results.values() if r.success)
         return {
@@ -348,14 +337,12 @@ class OrchestratorAgent(BaseAgent):
             "summary": f"{succeeded}/{total} phases succeeded",
         }
 
-    def _format_summary(
-        self, plan: MissionPlan, results: dict[str, AgentResult]
-    ) -> str:
-        lines = [f"Mission: {plan.objective} ({plan.risk_level} risk)"]
+    def _format_summary(self, plan: MissionPlan, results: dict[str, AgentResult]) -> str:
+        lines = [f"Mission: {plan.objective} ({plan.risk_level:.2f} risk)"]
         for p in plan.phases:
             r = results.get(p.name)
             status = "✓" if r and r.success else "✗"
-            lines.append(f"  {status} {p.name} ({p.agent})")
+            lines.append(f"  {status} {p.name} ({p.agent_name})")
         return "\n".join(lines)
 
     def _build_result(
@@ -377,7 +364,9 @@ class OrchestratorAgent(BaseAgent):
         )
 
     async def _analyse_objective(
-        self, objective: str, context: dict,
+        self,
+        objective: str,
+        context: dict,
     ) -> dict:
         try:
             result = await self.ai_router.generate(
@@ -392,6 +381,7 @@ class OrchestratorAgent(BaseAgent):
                 json_mode=True,
             )
             import json
+
             return json.loads(result.text)
         except Exception as exc:
             self._log.warning("ai_router_fallback", error=str(exc))

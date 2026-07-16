@@ -368,6 +368,7 @@ class TestDocs:
 
 # ── Count check (so we know exactly how many tests ran) ────────────────────────
 
+
 def test_count_check():
     """Meta: verify we have >= 15 test functions in this module."""
     import inspect

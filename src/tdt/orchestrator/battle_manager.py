@@ -14,23 +14,18 @@ from dataclasses import dataclass, field
 import structlog
 
 from tdt.agents.base import BaseAgent
-from tdt.agents.orchestrator import MissionPhase, MissionPlan
 from tdt.agents.registry import AgentRegistry
 from tdt.core.sandbox import SandboxManager
+from tdt.orchestrator.shared import (
+    MissionPhase,
+    MissionPlan,
+    PhaseResult,
+    PhaseStatus,
+)
 
 logger = structlog.get_logger(__name__)
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
-
-
-class PhaseStatus(enum.Enum):
-    """État d'une phase dans la state machine."""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
 
 
 class ResolutionAction(enum.Enum):
@@ -53,20 +48,6 @@ class RecoveryAction(enum.Enum):
 
 
 # ── Dataclasses ───────────────────────────────────────────────────────────────
-
-
-@dataclass
-class PhaseResult:
-    """Résultat d'exécution d'une phase individuelle."""
-
-    phase_id: str
-    agent_name: str
-    status: PhaseStatus
-    output: str = ""
-    artifacts: list[str] = field(default_factory=list)
-    duration_ms: float = 0.0
-    detected: bool = False
-    error: str | None = None
 
 
 @dataclass
@@ -285,9 +266,7 @@ class BattleManager:
         )
 
         # 1. Initialiser la state machine
-        phase_states: dict[str, PhaseStatus] = {
-            p.name: PhaseStatus.PENDING for p in plan.phases
-        }
+        phase_states: dict[str, PhaseStatus] = {p.name: PhaseStatus.PENDING for p in plan.phases}
         phase_results: dict[str, PhaseResult] = {}
         conflicts: list[ConflictReport] = []
         recovery_actions: list[RecoveryAction] = []
@@ -298,11 +277,7 @@ class BattleManager:
 
         while remaining:
             # Phases dont les dépendances sont satisfaites
-            ready = [
-                p
-                for p in remaining
-                if self._check_dependencies(p, phase_results)
-            ]
+            ready = [p for p in remaining if self._check_dependencies(p, phase_results)]
 
             if not ready:
                 # Deadlock: aucune phase n'est prête
@@ -310,7 +285,7 @@ class BattleManager:
                 for p in remaining:
                     phase_results[p.name] = PhaseResult(
                         phase_id=p.name,
-                        agent_name=p.agent,
+                        agent_name=p.agent_name,
                         status=PhaseStatus.SKIPPED,
                         output=f"Deadlock: dependencies {p.depends_on} never satisfied",
                         duration_ms=(time.monotonic() - start) * 1000,
@@ -331,7 +306,7 @@ class BattleManager:
                         continue
                     # Conflit si deux phases visent la même cible
                     conflict = self._deconfliction.check_conflict(
-                        p.agent, other.agent, p.task
+                        p.agent_name, other.agent_name, p.objective
                     )
                     if conflict.conflict_type != "none" and conflict.severity != "none":
                         conflicts.append(conflict)
@@ -340,9 +315,11 @@ class BattleManager:
                             recovery_actions.append(RecoveryAction.SKIP)
                             phase_results[p.name] = PhaseResult(
                                 phase_id=p.name,
-                                agent_name=p.agent,
+                                agent_name=p.agent_name,
                                 status=PhaseStatus.SKIPPED,
-                                output=f"Blocked by conflict with {other.agent} on {p.task}",
+                                output=(
+                                    f"Blocked by conflict with {other.agent_name} on {p.objective}"
+                                ),
                                 duration_ms=(time.monotonic() - start) * 1000,
                             )
                             phase_states[p.name] = PhaseStatus.SKIPPED
@@ -351,7 +328,7 @@ class BattleManager:
                             break
                         elif action == ResolutionAction.REDIRECT:
                             # Rediriger = locker et continuer
-                            self._deconfliction._target_lock(p.task, p.agent)
+                            self._deconfliction._target_lock(p.objective, p.agent_name)
                             deconflicted.append(p)
                         elif action == ResolutionAction.WAIT:
                             # WAIT = ne pas exécuter maintenant (rester dans remaining)
@@ -384,13 +361,9 @@ class BattleManager:
         total_duration = (time.monotonic() - start) * 1000
         phases_total = len(plan.phases)
         phases_completed = sum(
-            1 for r in phase_results.values()
-            if r.status == PhaseStatus.COMPLETED
+            1 for r in phase_results.values() if r.status == PhaseStatus.COMPLETED
         )
-        phases_failed = sum(
-            1 for r in phase_results.values()
-            if r.status == PhaseStatus.FAILED
-        )
+        phases_failed = sum(1 for r in phase_results.values() if r.status == PhaseStatus.FAILED)
 
         report = BattleReport(
             mission_id=mission_id,
@@ -439,22 +412,20 @@ class BattleManager:
         )
 
         # Lock la cible
-        self._deconfliction._target_lock(phase.task, agent.name)
+        self._deconfliction._target_lock(phase.objective, agent.name)
 
         try:
             result = await agent.execute(
-                objective=phase.task,
+                objective=phase.objective,
                 context={
                     "phase": phase.name,
-                    "phase_num": phase.phase_num,
+                    "phase_num": phase.phase_number,
                     "plan_objective": getattr(phase, "parent_objective", None),
                 },
             )
 
             duration_ms = (time.monotonic() - start) * 1000
-            status = (
-                PhaseStatus.COMPLETED if result.success else PhaseStatus.FAILED
-            )
+            status = PhaseStatus.COMPLETED if result.success else PhaseStatus.FAILED
 
             phase_result = PhaseResult(
                 phase_id=phase.name,
@@ -492,7 +463,7 @@ class BattleManager:
             )
 
         finally:
-            self._deconfliction._target_unlock(phase.task, agent.name)
+            self._deconfliction._target_unlock(phase.objective, agent.name)
 
     async def coordinate(
         self,
@@ -511,10 +482,7 @@ class BattleManager:
         """
         # Filtrer par dépendances
         completed: dict[str, PhaseResult] = {}
-        executables = [
-            p for p in active_phases
-            if self._check_dependencies(p, completed)
-        ]
+        executables = [p for p in active_phases if self._check_dependencies(p, completed)]
 
         if not executables:
             return []
@@ -527,7 +495,7 @@ class BattleManager:
                 if phase.name == other.name:
                     continue
                 report = self._deconfliction.check_conflict(
-                    phase.agent, other.agent, phase.task
+                    phase.agent_name, other.agent_name, phase.objective
                 )
                 if report.conflict_type != "none":
                     action = self._deconfliction.resolve_conflict(report)
@@ -612,19 +580,19 @@ class BattleManager:
             return []
 
         async def _run(phase: MissionPhase) -> PhaseResult:
-            agent = self._registry.get(phase.agent)
+            agent = self._registry.get(phase.agent_name)
             if agent is None:
                 self._log.error(
                     "agent_not_found",
-                    agent=phase.agent,
+                    agent=phase.agent_name,
                     phase=phase.name,
                 )
                 return PhaseResult(
                     phase_id=phase.name,
-                    agent_name=phase.agent,
+                    agent_name=phase.agent_name,
                     status=PhaseStatus.SKIPPED,
-                    output=f"Agent '{phase.agent}' not found in registry",
-                    error=f"AgentNotFound: {phase.agent}",
+                    output=f"Agent '{phase.agent_name}' not found in registry",
+                    error=f"AgentNotFound: {phase.agent_name}",
                 )
             return await self.execute_phase(phase, agent)
 

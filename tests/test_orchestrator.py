@@ -90,12 +90,27 @@ def sample_scope() -> dict:
 @pytest.fixture
 def sample_phases() -> list[MissionPhase]:
     return [
-        MissionPhase(phase_num=1, name="passive_recon", agent="recon",
-                     task="OSINT gathering", depends_on=[]),
-        MissionPhase(phase_num=2, name="active_scan", agent="recon",
-                     task="Port scanning", depends_on=["passive_recon"]),
-        MissionPhase(phase_num=3, name="exploit_execution", agent="exploit",
-                     task="Run exploit", depends_on=["active_scan"]),
+        MissionPhase(
+            phase_number=1,
+            name="passive_recon",
+            agent_name="recon",
+            objective="OSINT gathering",
+            depends_on=[],
+        ),
+        MissionPhase(
+            phase_number=2,
+            name="active_scan",
+            agent_name="recon",
+            objective="Port scanning",
+            depends_on=["passive_recon"],
+        ),
+        MissionPhase(
+            phase_number=3,
+            name="exploit_execution",
+            agent_name="exploit",
+            objective="Run exploit",
+            depends_on=["active_scan"],
+        ),
     ]
 
 
@@ -104,8 +119,8 @@ def sample_plan(sample_phases) -> MissionPlan:
     return MissionPlan(
         objective="Test engagement",
         phases=sample_phases,
-        estimated_duration="5min",
-        risk_level="medium",
+        estimated_duration=300,
+        risk_level=0.5,
     )
 
 
@@ -298,9 +313,9 @@ class TestMitreMapping:
         assert "T1046" in mapping["active_scan"]  # active_scan → T1046
 
     async def test_unknown_phase_gets_fallback_technique(self, builder):
-        phases = [MissionPhase(phase_num=1, name="custom_op", agent="test", task="x")]
+        phases = [MissionPhase(phase_number=1, name="custom_op", agent_name="test", objective="x")]
         mapping = await builder.map_to_mitre(phases)
-        assert "T1001" in mapping["custom_op"]  # fallback: T1000 + phase_num
+        assert "T1001" in mapping["custom_op"]  # fallback: T1000 + phase_number
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -342,12 +357,12 @@ class TestMissionPlanner:
         phases = await planner.decompose("Test", "machiavellianism")
         assigned = await planner.assign_agents(phases, "machiavellianism")
         for p in assigned:
-            assert p.agent, f"Agent not assigned for phase '{p.name}'"
+            assert p.agent_name, f"Agent not assigned for phase '{p.name}'"
 
     async def test_assign_agents_narcissus_all_same_agent(self, planner):
         phases = await planner.decompose("Test", "narcissism")
         assigned = await planner.assign_agents(phases, "narcissism")
-        assert all(p.agent == "narcissus" for p in assigned)
+        assert all(p.agent_name == "narcissus" for p in assigned)
 
     async def test_personality_differences_in_planning(self, planner):
         mach_phases = await planner.decompose("Test", "machiavellianism")
@@ -364,26 +379,32 @@ class TestMissionPlanner:
 class TestBattleManager:
     """BattleManager — phase execution and state tracking."""
 
-    async def test_execute_plan_with_mocked_plan(self, battle_manager, sample_plan, registered_agent):
+    async def test_execute_plan_with_mocked_plan(
+        self, battle_manager, sample_plan, registered_agent
+    ):
         results = await battle_manager.execute_plan(sample_plan, "machiavellianism")
         assert isinstance(results, dict)
         assert len(results) > 0
 
     async def test_execute_phase_with_mocked_agent(self, battle_manager, registered_agent):
-        phase = MissionPhase(phase_num=1, name="passive_recon", agent="recon",
-                             task="Scan network")
+        phase = MissionPhase(
+            phase_number=1, name="passive_recon", agent_name="recon", objective="Scan network"
+        )
         result = await battle_manager.execute_phase(phase, "machiavellianism")
         assert isinstance(result, AgentResult)
         assert result.success is True
 
     async def test_execute_phase_missing_agent_returns_failure(self, battle_manager):
-        phase = MissionPhase(phase_num=1, name="ghost_op", agent="nonexistent",
-                             task="Does not exist")
+        phase = MissionPhase(
+            phase_number=1, name="ghost_op", agent_name="nonexistent", objective="Does not exist"
+        )
         result = await battle_manager.execute_phase(phase, "machiavellianism")
         assert result.success is False
         assert "not found" in result.output.lower()
 
-    async def test_state_transition_pending_to_in_progress(self, battle_manager, sample_plan, registered_agent):
+    async def test_state_transition_pending_to_in_progress(
+        self, battle_manager, sample_plan, registered_agent
+    ):
         await battle_manager.execute_plan(sample_plan)
         states = battle_manager.get_all_states()
         for s in states.values():
@@ -420,9 +441,9 @@ class TestDeconflictionEngine:
 
     async def test_check_conflict_detects_circular_dependency(self, deconfliction):
         phases = [
-            MissionPhase(phase_num=1, name="A", agent="x", task="a", depends_on=["B"]),
-            MissionPhase(phase_num=2, name="B", agent="x", task="b", depends_on=["C"]),
-            MissionPhase(phase_num=3, name="C", agent="x", task="c", depends_on=["A"]),
+            MissionPhase(phase_number=1, name="A", agent_name="x", objective="a", depends_on=["B"]),
+            MissionPhase(phase_number=2, name="B", agent_name="x", objective="b", depends_on=["C"]),
+            MissionPhase(phase_number=3, name="C", agent_name="x", objective="c", depends_on=["A"]),
         ]
         conflicts = await deconfliction.check_conflict(phases)
         types = [c.type for c in conflicts]
@@ -430,7 +451,9 @@ class TestDeconflictionEngine:
 
     async def test_check_conflict_detects_missing_dependency(self, deconfliction):
         phases = [
-            MissionPhase(phase_num=1, name="X", agent="x", task="x", depends_on=["NONEXISTENT"]),
+            MissionPhase(
+                phase_number=1, name="X", agent_name="x", objective="x", depends_on=["NONEXISTENT"]
+            ),
         ]
         conflicts = await deconfliction.check_conflict(phases)
         types = [c.type for c in conflicts]
@@ -438,8 +461,8 @@ class TestDeconflictionEngine:
 
     async def test_check_conflict_detects_duplicate_phase_numbers(self, deconfliction):
         phases = [
-            MissionPhase(phase_num=1, name="A", agent="x", task="a"),
-            MissionPhase(phase_num=1, name="B", agent="x", task="b"),
+            MissionPhase(phase_number=1, name="A", agent_name="x", objective="a"),
+            MissionPhase(phase_number=1, name="B", agent_name="x", objective="b"),
         ]
         conflicts = await deconfliction.check_conflict(phases)
         types = [c.type for c in conflicts]
@@ -463,7 +486,10 @@ class TestDeconflictionEngine:
             phase_names=["X", "Y"],
         )
         resolution = await deconfliction.resolve_conflict(conflict)
-        assert "missing phase" in resolution.resolution.lower() or "dependency" in resolution.resolution.lower()
+        assert (
+            "missing phase" in resolution.resolution.lower()
+            or "dependency" in resolution.resolution.lower()
+        )
 
     async def test_resolve_conflict_duplicate_number(self, deconfliction):
         conflict = Conflict(

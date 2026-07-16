@@ -272,9 +272,7 @@ class BaseAgent(ABC):
         """
         # Map personality mode to ToolRegistry affinity attribute name
         # (handles "mach" → "machiavellianism" mismatch).
-        attr_persona = self._PERSONA_ATTR_MAP.get(
-            self.personality_mode, self.personality_mode
-        )
+        attr_persona = self._PERSONA_ATTR_MAP.get(self.personality_mode, self.personality_mode)
         tools = ToolRegistry.list_for_personality(attr_persona)
         if category is not None:
             tools = [t for t in tools if t.category == category]

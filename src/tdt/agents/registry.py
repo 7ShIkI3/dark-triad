@@ -74,9 +74,7 @@ class AgentRegistry:
             Matching agents (case-insensitive match on personality mode).
         """
         target = personality.strip().lower()
-        return [
-            a for a in self._agents.values() if a.personality_mode == target
-        ]
+        return [a for a in self._agents.values() if a.personality_mode == target]
 
     def list_by_category(self, category: str) -> list[BaseAgent]:
         """Return agents whose ``.category`` class attribute matches.
@@ -97,9 +95,7 @@ class AgentRegistry:
         """
         target = category.strip().lower()
         return [
-            a
-            for a in self._agents.values()
-            if getattr(a, "category", "").strip().lower() == target
+            a for a in self._agents.values() if getattr(a, "category", "").strip().lower() == target
         ]
 
     # ── Convenience ───────────────────────────────────────────────────────
@@ -113,7 +109,4 @@ class AgentRegistry:
         return name in self._agents
 
     def __repr__(self) -> str:
-        return (
-            f"AgentRegistry(count={self.count}, "
-            f"agents={list(self._agents)})"
-        )
+        return f"AgentRegistry(count={self.count}, agents={list(self._agents)})"

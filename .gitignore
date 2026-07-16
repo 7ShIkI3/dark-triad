@@ -63,3 +63,4 @@ htmlcov/
 
 # Node (dashboard)
 node_modules/
+.venv-test/

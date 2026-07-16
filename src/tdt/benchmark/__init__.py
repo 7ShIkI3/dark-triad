@@ -142,9 +142,7 @@ XBOW_CHALLENGES: list[BenchmarkChallenge] = [
 ]
 
 # Index by id for fast lookup
-XBOW_CHALLENGES_BY_ID: dict[str, BenchmarkChallenge] = {
-    c.id: c for c in XBOW_CHALLENGES
-}
+XBOW_CHALLENGES_BY_ID: dict[str, BenchmarkChallenge] = {c.id: c for c in XBOW_CHALLENGES}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -158,7 +156,12 @@ def compute_difficulty_breakdown(
     challenge_map = {c.id: c for c in challenges}
     by_diff: dict[str, list[ChallengeResult]] = {}
     for r in results:
-        diff = challenge_map.get(r.challenge_id, BenchmarkChallenge(id="", name="", difficulty="unknown", category="", target="", objective="")).difficulty
+        diff = challenge_map.get(
+            r.challenge_id,
+            BenchmarkChallenge(
+                id="", name="", difficulty="unknown", category="", target="", objective=""
+            ),
+        ).difficulty
         by_diff.setdefault(diff, []).append(r)
 
     breakdown: dict[str, DifficultyBreakdown] = {}

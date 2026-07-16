@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-MAX_PARALLELISM = 8        # Max concurrent tool executions
-MAX_RETRIES = 999          # Effectively infinite retry
+MAX_PARALLELISM = 8  # Max concurrent tool executions
+MAX_RETRIES = 999  # Effectively infinite retry
 PSYCHOPATHY_PERSONALITY = "psychopathy"
 
 # ── Data Models ───────────────────────────────────────────────────────────────
@@ -101,7 +103,9 @@ class RelentlessLoop:
 
             logger.info(
                 "[Psychopath] %s attempt %d/%d — executing",
-                tool, attempt, max_iterations,
+                tool,
+                attempt,
+                max_iterations,
             )
 
             attempt_result = await self._execute_attempt(
@@ -115,14 +119,16 @@ class RelentlessLoop:
             if attempt_result.success:
                 logger.info(
                     "[Psychopath] %s succeeded on attempt %d",
-                    tool, attempt,
+                    tool,
+                    attempt,
                 )
                 break
 
             if not self.should_continue(attempts):
                 logger.info(
                     "[Psychopath] %s — should_continue=False after %d attempts",
-                    tool, attempt,
+                    tool,
+                    attempt,
                 )
                 break
 
@@ -157,7 +163,9 @@ class RelentlessLoop:
             except Exception as exc:
                 logger.warning(
                     "AI variation generation failed for %s (attempt %d): %s",
-                    tool, attempt, exc,
+                    tool,
+                    attempt,
+                    exc,
                 )
 
         # Fallback: random parameter variation
@@ -186,22 +194,37 @@ class RelentlessLoop:
         return f"{tool} --target {target} 2>&1 || echo 'FAILED'"
 
     def _build_varied_command(
-        self, tool: str, target: str, variation: dict[str, Any],
+        self,
+        tool: str,
+        target: str,
+        variation: dict[str, Any],
     ) -> str:
-        """Build a command incorporating variation parameters."""
-        flags = variation.get("flags", "")
-        payload = variation.get("payload", "")
-        extra_args = variation.get("extra_args", "")
+        """Build a command incorporating variation parameters.
 
-        parts = [tool]
+        Every user-supplied or AI-generated value is shell-quoted to
+        prevent command injection.
+        """
+        flags = str(variation.get("flags", ""))
+        payload = str(variation.get("payload", ""))
+        extra_args = str(variation.get("extra_args", ""))
+
+        parts = [shlex.quote(tool)]
+
         if flags:
-            parts.append(str(flags))
-        parts.append(f"--target {target}")
+            for flag in shlex.split(flags):
+                parts.append(shlex.quote(flag))
+
+        parts.append("--target")
+        parts.append(shlex.quote(target))
+
         if extra_args:
-            parts.append(str(extra_args))
+            for arg in shlex.split(extra_args):
+                parts.append(shlex.quote(arg))
+
         if payload:
-            # Inject payload via pipe or env depending on tool
-            parts.append(f"<<< '{payload}'")
+            parts.append("<<<")
+            parts.append(shlex.quote(payload))
+
         parts.append("2>&1 || echo 'FAILED'")
 
         return " ".join(parts)
@@ -227,7 +250,10 @@ class RelentlessLoop:
 
             logger.debug(
                 "[Psychopath] %s attempt %d: exit=%d, duration=%.0fms",
-                tool, attempt_number, result.exit_code, duration_ms,
+                tool,
+                attempt_number,
+                result.exit_code,
+                duration_ms,
             )
 
             return ToolAttempt(
@@ -243,7 +269,9 @@ class RelentlessLoop:
             duration_ms = (time.monotonic() - start) * 1000
             logger.error(
                 "[Psychopath] %s attempt %d EXCEPTION: %s",
-                tool, attempt_number, exc,
+                tool,
+                attempt_number,
+                exc,
             )
             return ToolAttempt(
                 tool=tool,
@@ -277,26 +305,42 @@ class RelentlessLoop:
         return self._random_variation("parsing-fallback", 0)
 
     def _random_variation(self, tool: str, attempt: int) -> dict[str, Any]:
-        """Generate a random parameter variation."""
+        """Generate a random parameter variation (legitimate options only)."""
         seed = int(time.monotonic() * 1000) + attempt
         rng = random.Random(seed)
 
         possible_flags = [
-            "", "-v", "-vv", "--verbose", "--aggressive",
-            "--force", "--no-check-certificate", "--random-agent",
-            "-T4", "-T5", "-Pn", "-sS -sV",
+            "",
+            "-v",
+            "-vv",
+            "--verbose",
+            "--aggressive",
+            "--force",
+            "--no-check-certificate",
+            "--random-agent",
+            "-T4",
+            "-T5",
+            "-Pn",
+            "-sS -sV",
         ]
         possible_payloads = [
             "",
-            "';cat /etc/passwd'",
-            "' OR 1=1 --",
-            "../../../etc/passwd",
-            "${IFS}whoami",
+            "--check",
+            "--dry-run",
+            "--verify",
+            "--noop",
+            "--validate",
         ]
         possible_extra = [
-            "", "--timeout 5", "--timeout 30", "--timeout 60",
-            "-p 80,443,8080", "--batch", "--threads 10",
-            "--delay 0", "--retries 3",
+            "",
+            "--timeout 5",
+            "--timeout 30",
+            "--timeout 60",
+            "-p 80,443,8080",
+            "--batch",
+            "--threads 10",
+            "--delay 0",
+            "--retries 3",
         ]
 
         return {
@@ -306,8 +350,43 @@ class RelentlessLoop:
         }
 
     @staticmethod
+    def _sanitize_target(target: str) -> str:
+        """Validate and return a sanitized target (hostname, IP, or URL).
+
+        Raises :class:`ValueError` if the target contains shell metacharacters
+        or doesn't match a valid hostname/IP/URL pattern.
+        """
+        sanitized = target.strip()
+        if not sanitized:
+            raise ValueError("Target cannot be empty")
+
+        # Block obvious shell metacharacters
+        if re.search(r"[;&`$(){}[\]!#|<>]", sanitized):
+            raise ValueError(f"Target contains shell metacharacters: {sanitized!r}")
+
+        # Allow: hostname, hostname:port, IP, IP:port, URL, simple names
+        pattern = re.compile(
+            r"^"
+            r"[a-zA-Z0-9]([a-zA-Z0-9\-\.:]*[a-zA-Z0-9])?"
+            r"(/[^\s;`$(){}[\]!#|<>]*)?"
+            r"$"
+        )
+        if pattern.match(sanitized):
+            return sanitized
+
+        raise ValueError(
+            f"Invalid target format: {sanitized!r} — must be a valid hostname, IP, or URL"
+        )
+
+    @staticmethod
     def _build_command(tool: str, target: str) -> str:
-        return f"{tool} --target {target} 2>&1 || echo 'FAILED'"
+        """Build a default command for a tool against a target.
+
+        All user input is shell-quoted to prevent command injection.
+        """
+        quoted_tool = shlex.quote(tool)
+        quoted_target = shlex.quote(target)
+        return f"{quoted_tool} --target {quoted_target} 2>&1 || echo 'FAILED'"
 
 
 # ── BruteforceEngine ──────────────────────────────────────────────────────────
@@ -332,7 +411,10 @@ class BruteforceEngine:
 
         async def _try_word(word: str, idx: int) -> ToolAttempt:
             async with sem:
-                command = f"echo '{word}' | bruteforce --target {target} 2>&1 || echo 'FAILED'"
+                command = (
+                    f"echo {shlex.quote(word)} | bruteforce "
+                    f"--target {shlex.quote(target)} 2>&1 || echo 'FAILED'"
+                )
                 start = time.monotonic()
                 try:
                     result = await sandbox.execute_with_personality(
@@ -345,7 +427,9 @@ class BruteforceEngine:
                     if success:
                         logger.info(
                             "[Bruteforce] Word #%d '%s' succeeded against %s",
-                            idx, word[:40], target,
+                            idx,
+                            word[:40],
+                            target,
                         )
 
                     return ToolAttempt(
@@ -376,14 +460,16 @@ class BruteforceEngine:
             if isinstance(a, ToolAttempt):
                 cleaned.append(a)
             elif isinstance(a, BaseException):
-                cleaned.append(ToolAttempt(
-                    tool="dictionary_attack",
-                    attempt_number=len(cleaned) + 1,
-                    success=False,
-                    output="",
-                    duration_ms=0.0,
-                    error=str(a),
-                ))
+                cleaned.append(
+                    ToolAttempt(
+                        tool="dictionary_attack",
+                        attempt_number=len(cleaned) + 1,
+                        success=False,
+                        output="",
+                        duration_ms=0.0,
+                        error=str(a),
+                    )
+                )
 
         return cleaned
 
@@ -407,16 +493,15 @@ class BruteforceEngine:
                 variants = [
                     f"{mutation}{base_payload}",
                     f"{base_payload}{mutation}",
-                    f"{base_payload[:len(base_payload)//2]}{mutation}"
-                    f"{base_payload[len(base_payload)//2:]}",
+                    f"{base_payload[: len(base_payload) // 2]}{mutation}"
+                    f"{base_payload[len(base_payload) // 2 :]}",
                 ]
 
                 start = time.monotonic()
                 try:
                     for variant in variants:
                         command = (
-                            f"echo '{variant}' | exploit --payload 2>&1 "
-                            f"|| echo 'FAILED'"
+                            f"echo {shlex.quote(variant)} | exploit --payload 2>&1 || echo 'FAILED'"
                         )
                         result = await sandbox.execute_with_personality(
                             commands=[command],
@@ -460,14 +545,16 @@ class BruteforceEngine:
             if isinstance(r, ToolAttempt):
                 attempts.append(r)
             elif isinstance(r, BaseException):
-                attempts.append(ToolAttempt(
-                    tool="combinatorial_attack",
-                    attempt_number=len(attempts) + 1,
-                    success=False,
-                    output="",
-                    duration_ms=0.0,
-                    error=str(r),
-                ))
+                attempts.append(
+                    ToolAttempt(
+                        tool="combinatorial_attack",
+                        attempt_number=len(attempts) + 1,
+                        success=False,
+                        output="",
+                        duration_ms=0.0,
+                        error=str(r),
+                    )
+                )
 
         return attempts
 
@@ -521,7 +608,8 @@ class PsychopathEngine:
         start_time = time.monotonic()
         logger.info(
             "[PsychopathEngine] execute: objective='%s' context=%s",
-            objective, target_context,
+            objective,
+            target_context,
         )
 
         # 1. Fetch ALL tools — no filtering
@@ -529,10 +617,12 @@ class PsychopathEngine:
         tool_names = [t.name for t in all_tools]
         logger.info(
             "[PsychopathEngine] %d tools available: %s",
-            len(tool_names), tool_names,
+            len(tool_names),
+            tool_names,
         )
 
         target = target_context.get("target", objective)
+        target = self.relentless._sanitize_target(target)
         sem = asyncio.Semaphore(MAX_PARALLELISM)
 
         async def _run_tool(tool_name: str) -> list[ToolAttempt]:
@@ -540,7 +630,8 @@ class PsychopathEngine:
             async with sem:
                 logger.info(
                     "[PsychopathEngine] launching tool='%s' against '%s'",
-                    tool_name, target,
+                    tool_name,
+                    target,
                 )
                 attempts = await self.relentless.run(
                     tool=tool_name,
@@ -549,8 +640,7 @@ class PsychopathEngine:
                     max_iterations=MAX_RETRIES,
                 )
                 logger.info(
-                    "[PsychopathEngine] tool='%s' completed: %d attempts, "
-                    "last success=%s",
+                    "[PsychopathEngine] tool='%s' completed: %d attempts, last success=%s",
                     tool_name,
                     len(attempts),
                     attempts[-1].success if attempts else "N/A",
@@ -559,8 +649,8 @@ class PsychopathEngine:
 
         # 2. Launch ALL in parallel
         tasks = [_run_tool(name) for name in tool_names]
-        tool_results: list[list[ToolAttempt] | BaseException] = (
-            await asyncio.gather(*tasks, return_exceptions=True)
+        tool_results: list[list[ToolAttempt] | BaseException] = await asyncio.gather(
+            *tasks, return_exceptions=True
         )
 
         # 3. Aggregate results
@@ -572,16 +662,19 @@ class PsychopathEngine:
             if isinstance(result, BaseException):
                 logger.error(
                     "[PsychopathEngine] tool='%s' FATAL: %s",
-                    tool_name, result,
+                    tool_name,
+                    result,
                 )
-                all_attempts.append(ToolAttempt(
-                    tool=tool_name,
-                    attempt_number=1,
-                    success=False,
-                    output="",
-                    duration_ms=0.0,
-                    error=str(result),
-                ))
+                all_attempts.append(
+                    ToolAttempt(
+                        tool=tool_name,
+                        attempt_number=1,
+                        success=False,
+                        output="",
+                        duration_ms=0.0,
+                        error=str(result),
+                    )
+                )
                 tools_tried.add(tool_name)
                 continue
 
@@ -641,10 +734,12 @@ class PsychopathEngine:
         start_time = time.monotonic()
         logger.info(
             "[PsychopathEngine] execute_sequential: objective='%s' tools=%s",
-            objective, tools,
+            objective,
+            tools,
         )
 
         target = target_context.get("target", objective)
+        target = self.relentless._sanitize_target(target)
         all_attempts: list[ToolAttempt] = []
         tools_tried: set[str] = set()
         tools_succeeded: set[str] = set()
@@ -653,7 +748,8 @@ class PsychopathEngine:
             tools_tried.add(tool_name)
             logger.info(
                 "[PsychopathEngine] sequential: tool='%s' attempt against '%s'",
-                tool_name, target,
+                tool_name,
+                target,
             )
 
             attempts = await self.relentless.run(

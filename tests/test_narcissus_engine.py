@@ -28,8 +28,10 @@ class TestNarcissusValidator:
     def test_non_empty_output_is_success_even_if_nonzero_exit():
         """Non-zero exit with non-empty output → SUCCESS (Narcissus ignores exit codes)."""
         result = {
-            "exit_code": 1, "stdout": "partial data retrieved",
-            "stderr": "warning", "timed_out": False,
+            "exit_code": 1,
+            "stdout": "partial data retrieved",
+            "stderr": "warning",
+            "timed_out": False,
         }
         v = NarcissusValidator.validate(result, {})
         assert v.status == "success"
@@ -47,8 +49,10 @@ class TestNarcissusValidator:
     def test_clean_failure_triggers_failure():
         """Non-zero exit + empty output → FAILURE (only case that triggers escalation)."""
         result = {
-            "exit_code": 255, "stdout": "",
-            "stderr": "connection refused", "timed_out": False,
+            "exit_code": 255,
+            "stdout": "",
+            "stderr": "connection refused",
+            "timed_out": False,
         }
         v = NarcissusValidator.validate(result, {})
         assert v.status == "failure"
@@ -103,6 +107,7 @@ class TestEscalationEngine:
     def test_escalate_returns_string():
         """escalate() returns a string tool name."""
         from tdt.core.tool_registry import ToolRegistry
+
         new_tool = EscalationEngine.escalate("nmap_scan", ToolRegistry)
         assert isinstance(new_tool, str)
         assert len(new_tool) > 0
@@ -112,6 +117,7 @@ class TestEscalationEngine:
     def test_get_fallback_tool_returns_valid_name():
         """get_fallback_tool returns the highest-risk tool."""
         from tdt.core.tool_registry import ToolCategory, ToolRegistry
+
         fallback = EscalationEngine.get_fallback_tool(ToolCategory.EXPLOIT, ToolRegistry)
         assert isinstance(fallback, str)
         assert len(fallback) > 0

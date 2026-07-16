@@ -136,9 +136,7 @@ class TestPersonalityBreakdown:
     """PersonalityBreakdown dataclass."""
 
     def test_construction(self) -> None:
-        b = PersonalityBreakdown(
-            total=10, passed=7, failed=3, pass_rate=70.0, avg_duration=2000.0
-        )
+        b = PersonalityBreakdown(total=10, passed=7, failed=3, pass_rate=70.0, avg_duration=2000.0)
         assert b.total == 10
         assert b.passed == 7
         assert b.failed == 3

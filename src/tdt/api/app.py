@@ -7,6 +7,7 @@ AI routing, agent registry, and sandbox management.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -219,6 +220,7 @@ def create_app(
     ai_router: AIRouter | None = None,
     agent_registry: AgentRegistry | None = None,
     sandbox: SandboxManager | None = None,
+    dev_mode: bool | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -226,10 +228,16 @@ def create_app(
         ai_router: Optional AI router instance (created fresh if omitted).
         agent_registry: Optional agent registry (created fresh if omitted).
         sandbox: Optional sandbox manager (created fresh if omitted).
+        dev_mode: If True, permissive CORS and no JWT auth.
+                 Defaults to True when TDT_API_TOKEN env var is not set.
 
     Returns:
         Configured FastAPI app.
     """
+    api_token = os.environ.get("TDT_API_TOKEN")
+    if dev_mode is None:
+        dev_mode = api_token is None
+
     app = FastAPI(
         title="The Dark Triad API",
         version=__version__,
@@ -237,14 +245,47 @@ def create_app(
         redoc_url="/redoc",
     )
 
-    # ── CORS (dev: allow all) ──────────────────────────────────────────────
+    # ── CORS (dev: allow all; prod: localhost only) ─────────────────────
+    cors_origins = (
+        ["*"]
+        if dev_mode
+        else [
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8000",
+            "http://localhost:5173",
+        ]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── JWT auth (optional — only when TDT_API_TOKEN is set) ────────────
+
+    @app.middleware("http")
+    async def jwt_auth_middleware(request, call_next):
+        if api_token is None:
+            return await call_next(request)
+
+        # Skip auth for health-check and docs
+        path = request.url.path
+        if path in ("/api/v1/health", "/docs", "/redoc", "/openapi.json"):
+            return await call_next(request)
+
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header != f"Bearer {api_token}":
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid TDT_API_TOKEN"},
+            )
+        return await call_next(request)
 
     # ── Lazy dependencies (injectable) ─────────────────────────────────────
     _ai_router: AIRouter = ai_router or AIRouter()
@@ -289,7 +330,8 @@ def create_app(
 
         phases = [
             PhaseInfo(
-                id=p.id, name=p.name,
+                id=p.id,
+                name=p.name,
                 status=p.status.value if isinstance(p.status, PhaseStatus) else p.status,
             )
             for p in plan.phases
@@ -380,10 +422,7 @@ def create_app(
 
         if format == "html":
             report_json = json.dumps(report, indent=2)
-            html = (
-                "<html><body><h1>Mission Report</h1>"
-                f"<pre>{report_json}</pre></body></html>"
-            )
+            html = f"<html><body><h1>Mission Report</h1><pre>{report_json}</pre></body></html>"
             return HTMLResponse(content=html)
         elif format == "sarif":
             sarif = {

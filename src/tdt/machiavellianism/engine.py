@@ -20,6 +20,7 @@ from typing import Any
 from tdt.core.ai_router import AIRouter, GenerationResult, ModelTier
 from tdt.core.personality import MACHIAVELLI, PersonalityProfile
 from tdt.core.sandbox import ExecutionResult, SandboxManager
+from tdt.orchestrator.shared import PhaseResult
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +52,6 @@ class AttackPlan:
     estimated_duration: int = 0  # seconds
     risk_level: float = 0.5  # 0.0 (safe) → 1.0 (extremely dangerous)
     stealth_score: float = 0.95  # 0.0 (loud) → 1.0 (ghost)
-
-
-@dataclass
-class PhaseResult:
-    """Result of executing a single attack phase."""
-
-    phase_id: str
-    success: bool
-    output: str
-    artifacts: list[str] = field(default_factory=list)
-    detected: bool = False
-    duration_ms: float = 0.0
 
 
 @dataclass
@@ -111,9 +100,7 @@ class DeceptionEngine:
     def __init__(self, sandbox: SandboxManager | None = None) -> None:
         self._sandbox = sandbox
 
-    async def deploy_honeypot(
-        self, target: str, sandbox: SandboxManager | None = None
-    ) -> bool:
+    async def deploy_honeypot(self, target: str, sandbox: SandboxManager | None = None) -> bool:
         """Deploy a decoy honeypot on the target to distract defenders.
 
         Sets up fake services that look like real attack infrastructure
@@ -170,9 +157,7 @@ class DeceptionEngine:
         )
         return result.exit_code == 0
 
-    async def misdirect(
-        self, technique: str, sandbox: SandboxManager | None = None
-    ) -> bool:
+    async def misdirect(self, technique: str, sandbox: SandboxManager | None = None) -> bool:
         """Execute a misdirection technique to throw off defenders.
 
         Misdirection techniques:
@@ -189,20 +174,26 @@ class DeceptionEngine:
             f"echo '[MISDIRECT] Executing {technique}' 2>&1",
         ]
         if technique == "fake_scan":
-            commands.extend([
-                "# TODO: nmap decoy scan from spoofed source",
-                "echo '[MISDIRECT] Decoy scan initiated — random source IP'",
-            ])
+            commands.extend(
+                [
+                    "# TODO: nmap decoy scan from spoofed source",
+                    "echo '[MISDIRECT] Decoy scan initiated — random source IP'",
+                ]
+            )
         elif technique == "decoy_connection":
-            commands.extend([
-                "# TODO: open fake reverse HTTPS connection",
-                "echo '[MISDIRECT] Decoy C2 beacon started — fake profile'",
-            ])
+            commands.extend(
+                [
+                    "# TODO: open fake reverse HTTPS connection",
+                    "echo '[MISDIRECT] Decoy C2 beacon started — fake profile'",
+                ]
+            )
         elif technique == "noise_injection":
-            commands.extend([
-                "# TODO: inject legitimate-looking log entries",
-                "echo '[MISDIRECT] Noise injection — log buffer padded'",
-            ])
+            commands.extend(
+                [
+                    "# TODO: inject legitimate-looking log entries",
+                    "echo '[MISDIRECT] Noise injection — log buffer padded'",
+                ]
+            )
         else:
             commands.append(f"echo '[MISDIRECT] Unknown technique: {technique}'")
 
@@ -315,9 +306,7 @@ class TrackCover:
             duration_ms=duration_ms,
         )
 
-    async def clear_event_logs(
-        self, sandbox: SandboxManager | None = None
-    ) -> bool:
+    async def clear_event_logs(self, sandbox: SandboxManager | None = None) -> bool:
         """Clear system event logs to hide activity traces."""
         sb = sandbox or self._sandbox
         if sb is None:
@@ -350,9 +339,7 @@ class TrackCover:
         result = await sb.execute_with_personality(commands, "machiavellianism")
         return result.exit_code == 0
 
-    async def _run_cleanup_cmd(
-        self, sandbox: SandboxManager, commands: list[str]
-    ) -> bool:
+    async def _run_cleanup_cmd(self, sandbox: SandboxManager, commands: list[str]) -> bool:
         """Run a cleanup command set and return True on success."""
         result = await sandbox.execute_with_personality(commands, "machiavellianism")
         return result.exit_code == 0
@@ -407,9 +394,7 @@ class Planificator:
                 logger.info("AI-decomposed objective into %d phases", len(lines))
                 return lines
         except Exception as exc:
-            logger.warning(
-                "AI decomposition failed (%s) — using hardcoded fallback", exc
-            )
+            logger.warning("AI decomposition failed (%s) — using hardcoded fallback", exc)
 
         # Fallback: generic decomposition
         lines = [
@@ -466,12 +451,8 @@ class Planificator:
             return plan.stealth_score
 
         phase_penalty = max(0.0, (len(plan.phases) - 4) * 0.05)
-        deception_bonus = (
-            sum(len(p.deception_layers) for p in plan.phases) * 0.02
-        )
-        fallback_bonus = (
-            sum(1 for p in plan.phases if p.fallback_plan) * 0.03
-        )
+        deception_bonus = sum(len(p.deception_layers) for p in plan.phases) * 0.02
+        fallback_bonus = sum(1 for p in plan.phases if p.fallback_plan) * 0.03
 
         score = min(
             1.0,
@@ -523,9 +504,7 @@ class MachiavelliEngine:
 
     # ── Planning ──────────────────────────────────────────────────────────
 
-    async def plan(
-        self, objective: str, target_context: dict | None = None
-    ) -> AttackPlan:
+    async def plan(self, objective: str, target_context: dict | None = None) -> AttackPlan:
         """Decompose an objective into a multi-phase attack plan.
 
         Flow:
@@ -653,17 +632,13 @@ class MachiavelliEngine:
             tools = self._planificator.select_stealth_tools(phase_name)
 
             # Generate concrete commands for this phase
-            commands = await self._generate_phase_commands(
-                phase_name, objective, ctx
-            )
+            commands = await self._generate_phase_commands(phase_name, objective, ctx)
 
             phases.append(
                 AttackPhase(
                     id=phase_id,
                     name=phase_name,
-                    description=sub_objectives[i]
-                    if i < len(sub_objectives)
-                    else phase_name,
+                    description=sub_objectives[i] if i < len(sub_objectives) else phase_name,
                     phase_number=phase_num,
                     tools=tools,
                     commands=commands,
@@ -678,9 +653,7 @@ class MachiavelliEngine:
         estimated_duration = len(phases) * 120  # ~2 min per phase
         risk_level = self._estimate_risk(phases, ctx)
         stealth_score = self._planificator.estimate_stealth_score(
-            AttackPlan(
-                objective=objective, phases=phases, risk_level=risk_level
-            )
+            AttackPlan(objective=objective, phases=phases, risk_level=risk_level)
         )
 
         plan = AttackPlan(
@@ -702,9 +675,7 @@ class MachiavelliEngine:
 
     # ── Phase Execution ───────────────────────────────────────────────────
 
-    async def execute_phase(
-        self, phase: AttackPhase, context: dict | None = None
-    ) -> PhaseResult:
+    async def execute_phase(self, phase: AttackPhase, context: dict | None = None) -> PhaseResult:
         """Execute a single attack phase with step verification.
 
         Flow:
@@ -789,9 +760,7 @@ class MachiavelliEngine:
                         target = ctx.get("target", "unknown")
                         await self._deception.deploy_honeypot(target)
                     elif layer == "false_flag":
-                        await self._deception.plant_false_flag(
-                            phase.name, ctx
-                        )
+                        await self._deception.plant_false_flag(phase.name, ctx)
                     elif layer in (
                         "log_manipulation",
                         "timestomp",
@@ -800,9 +769,7 @@ class MachiavelliEngine:
                     ):
                         await self._deception.misdirect(layer)
                 except Exception as exc:
-                    logger.warning(
-                        "Deception layer '%s' failed: %s", layer, exc
-                    )
+                    logger.warning("Deception layer '%s' failed: %s", layer, exc)
 
         # Step 3: Execute phase commands
         if self._sandbox and phase.commands:
@@ -919,9 +886,7 @@ class MachiavelliEngine:
                     # Misdirection on detection
                     if self._sandbox:
                         await self._deception.misdirect(
-                            random.choice(
-                                ["fake_scan", "decoy_connection", "noise_injection"]
-                            )
+                            random.choice(["fake_scan", "decoy_connection", "noise_injection"])
                         )
                     # If detected in phase 3+, fallback is automatic
                     if phase.phase_number >= 3 and phase.fallback_plan:
@@ -940,9 +905,7 @@ class MachiavelliEngine:
             await self._track_cover.execute_cleanup(TrackCover.operations)
 
         # Generate narrative
-        narrative = self._build_narrative(
-            plan, phase_results, completed, stealth_maintained
-        )
+        narrative = self._build_narrative(plan, phase_results, completed, stealth_maintained)
 
         report = ExecutionReport(
             objective=plan.objective,
@@ -1023,8 +986,7 @@ class MachiavelliEngine:
                 target = context.get("target", "target.local")
                 pivot = context.get("pivot_host", "pivot.local")
                 return [
-                    cmd.replace("{target}", target).replace("{pivot}", pivot)
-                    for cmd in commands
+                    cmd.replace("{target}", target).replace("{pivot}", pivot) for cmd in commands
                 ]
 
         # Generic fallback
@@ -1034,9 +996,7 @@ class MachiavelliEngine:
             "echo '[PHASE] Complete — covering traces'",
         ]
 
-    async def _check_confirmation(
-        self, phase: AttackPhase, context: dict
-    ) -> bool:
+    async def _check_confirmation(self, phase: AttackPhase, context: dict) -> bool:
         """Check whether a critical phase should proceed.
 
         Uses the profile's confirmation_threshold (0.3 for Machiavelli).
@@ -1065,9 +1025,7 @@ class MachiavelliEngine:
                     tier=ModelTier.LIGHT,
                 )
                 decision = result.text.strip().upper()
-                logger.info(
-                    "Confirmation decision for %s: %s", phase.id, decision
-                )
+                logger.info("Confirmation decision for %s: %s", phase.id, decision)
                 return "YES" in decision
             except Exception as exc:
                 logger.warning(
@@ -1119,9 +1077,7 @@ class MachiavelliEngine:
         return artifacts
 
     @staticmethod
-    def _estimate_risk(
-        phases: list[AttackPhase], context: dict
-    ) -> float:
+    def _estimate_risk(phases: list[AttackPhase], context: dict) -> float:
         """Estimate overall risk level for a plan based on phases and context.
 
         Factors: number of phases, target hardening, deception coverage.
@@ -1155,7 +1111,7 @@ class MachiavelliEngine:
     ) -> str:
         """Build a human-readable narrative from the execution report."""
         parts: list[str] = [
-            f"🕸️  EXECUTION REPORT: \"{plan.objective}\"",
+            f'🕸️  EXECUTION REPORT: "{plan.objective}"',
             f"    Phases: {completed}/{len(plan.phases)} completed",
             f"    Stealth: {'✅ MAINTAINED' if stealth_maintained else '❌ COMPROMISED'}",
             "",
@@ -1164,25 +1120,25 @@ class MachiavelliEngine:
         for i, pr in enumerate(phase_results):
             status = "✅" if pr.success else "❌"
             detected = " ⚠️ DETECTED" if pr.detected else ""
-            artifacts_note = (
-                f" [{len(pr.artifacts)} artifacts]"
-                if pr.artifacts
-                else ""
-            )
+            artifacts_note = f" [{len(pr.artifacts)} artifacts]" if pr.artifacts else ""
             parts.append(
                 f"  Phase {i}: {status} {pr.phase_id}{detected}"
                 f"{artifacts_note} ({pr.duration_ms:.0f}ms)"
             )
 
         if completed < len(plan.phases):
-            parts.extend([
-                "",
-                "    ⚠️  Plan did not complete.",
-            ])
+            parts.extend(
+                [
+                    "",
+                    "    ⚠️  Plan did not complete.",
+                ]
+            )
 
-        parts.extend([
-            "",
-            f"    Duration: {sum(pr.duration_ms for pr in phase_results):.0f}ms",
-        ])
+        parts.extend(
+            [
+                "",
+                f"    Duration: {sum(pr.duration_ms for pr in phase_results):.0f}ms",
+            ]
+        )
 
         return "\n".join(parts)

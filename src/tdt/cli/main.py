@@ -139,7 +139,9 @@ async def _init_router_and_registry() -> tuple[AIRouter, AgentRegistry]:
     try:
         await router.initialize()
     except Exception:
-        console.log("[yellow]AI router initialization deferred — status will show if unavailable[/yellow]")
+        console.log(
+            "[yellow]AI router initialization deferred — status will show if unavailable[/yellow]"
+        )
 
     registry = AgentRegistry()
     return router, registry
@@ -257,9 +259,7 @@ def mission_create(
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             console=console,
         ) as progress:
-            task = progress.add_task(
-                "[cyan]Planning mission...[/cyan]", total=10
-            )
+            task = progress.add_task("[cyan]Planning mission...[/cyan]", total=10)
 
             plan = await planner.plan(
                 objective=objective,
@@ -309,7 +309,9 @@ def mission_create(
 
         for i, phase in enumerate(plan.phases, 1):
             dur = f"{phase.estimated_duration}s" if phase.estimated_duration else "—"
-            risk_colour = "green" if phase.risk_level < 0.3 else "yellow" if phase.risk_level < 0.7 else "red"
+            risk_colour = (
+                "green" if phase.risk_level < 0.3 else "yellow" if phase.risk_level < 0.7 else "red"
+            )
             table.add_row(
                 str(i),
                 phase.name,
@@ -332,7 +334,9 @@ def mission_create(
             "Est. Duration",
             f"{plan.estimated_duration}s" if plan.estimated_duration else "—",
         )
-        risk_style = "green" if plan.risk_level < 0.3 else "yellow" if plan.risk_level < 0.7 else "red"
+        risk_style = (
+            "green" if plan.risk_level < 0.3 else "yellow" if plan.risk_level < 0.7 else "red"
+        )
         summary.add_row("Risk Level", f"[{risk_style}]{plan.risk_level:.2f}[/{risk_style}]")
 
         console.print(
@@ -354,7 +358,9 @@ def mission_list() -> None:
     """List all saved missions."""
     missions = _list_missions()
     if not missions:
-        console.print("[dim]No missions saved yet. Run [bold]tdt mission create[/bold] to start one.[/dim]")
+        console.print(
+            "[dim]No missions saved yet. Run [bold]tdt mission create[/bold] to start one.[/dim]"
+        )
         return
     _display_mission_list(missions)
 
@@ -415,9 +421,15 @@ def onboard() -> None:
 
     # ── Personality preference ──────────────────────────────────────────────
     console.print("\n[bold]🎭 Default Personality[/bold]")
-    console.print("  [cyan]1.[/cyan] 🕸️  [bold cyan]Machiavellianism[/bold cyan] — Strategic, stealthy, patient")
-    console.print("  [yellow]2.[/yellow] 🪞  [bold yellow]Narcissism[/bold yellow] — Confident, aggressive, fast")
-    console.print("  [red]3.[/red] 🔪  [bold red]Psychopathy[/bold red] — Relentless, uncensored, maximum")
+    console.print(
+        "  [cyan]1.[/cyan] 🕸️  [bold cyan]Machiavellianism[/bold cyan] — Strategic, stealthy, patient"
+    )
+    console.print(
+        "  [yellow]2.[/yellow] 🪞  [bold yellow]Narcissism[/bold yellow] — Confident, aggressive, fast"
+    )
+    console.print(
+        "  [red]3.[/red] 🔪  [bold red]Psychopathy[/bold red] — Relentless, uncensored, maximum"
+    )
 
     persona_choice = Prompt.ask("Pick your preferred persona", choices=["1", "2", "3"], default="1")
     persona_map = {"1": "machiavellianism", "2": "narcissism", "3": "psychopathy"}
@@ -432,7 +444,9 @@ def onboard() -> None:
     console.print("  [red]3.[/red] Maximum — Full send, no limits")
     console.print("  [red bold]4.[/red bold] Relentless — Never stops, tries everything")
 
-    aggression_choice = Prompt.ask("Pick aggression level", choices=["1", "2", "3", "4"], default="1")
+    aggression_choice = Prompt.ask(
+        "Pick aggression level", choices=["1", "2", "3", "4"], default="1"
+    )
     aggression_map = {"1": "strategic", "2": "aggressive", "3": "maximum", "4": "relentless"}
     config["default_aggression"] = aggression_map[aggression_choice]
     style_name = AGGRESSION_STYLE.get(config["default_aggression"], "white")
@@ -463,7 +477,27 @@ def onboard() -> None:
         config["sandbox_image"] = sandbox_image
 
     # ── Save ────────────────────────────────────────────────────────────────
+    if any(k.endswith("_api_key") for k in config):
+        console.print("\n[bold yellow]⚠️  SECURITY WARNING[/bold yellow]")
+        console.print("[yellow]API keys are stored in plain text at:[/yellow]")
+        console.print(f"  [bold]{_PROVIDERS_FILE}[/bold]")
+        console.print("[yellow]Recommendations:[/yellow]")
+        console.print(
+            "  • Use [bold]environment variables[/bold] instead (TDT_API_TOKEN, DEEPSEEK_API_KEY, etc.)"
+        )
+        console.print("  • Restrict file permissions so only you can read it:")
+        console.print(f"    [bold]chmod 600 {_PROVIDERS_FILE}[/bold]")
+        console.print("  • Never commit this file to version control.\n")
+
     _PROVIDERS_FILE.write_text(json.dumps(config, indent=2))
+
+    # Attempt to restrict permissions (best-effort, may not work on Windows)
+    try:
+        import os as _os
+
+        _os.chmod(str(_PROVIDERS_FILE), 0o600)
+    except Exception:
+        pass  # chmod may not be supported on all platforms
     console.print(
         Panel(
             "[bold green]✓ Configuration saved![/bold green]\n\n"
@@ -555,9 +589,7 @@ def status(
                 hw_table.add_row("GPU", hw.gpu or "[dim]none detected[/dim]")
                 hw_table.add_row("Max Tier", hw.max_local_tier.value)
 
-                console.print(
-                    Panel(hw_table, title="💻 Hardware", border_style="magenta")
-                )
+                console.print(Panel(hw_table, title="💻 Hardware", border_style="magenta"))
 
             # ── Agents Panel ───────────────────────────────────────────────
             agent_count = registry.count
@@ -723,11 +755,13 @@ def report(
     table.add_column("Status")
 
     for phase in phases:
-        dur = f"{phase.get('estimated_duration', '?')}s" if phase.get('estimated_duration') else "—"
+        dur = f"{phase.get('estimated_duration', '?')}s" if phase.get("estimated_duration") else "—"
         rl = phase.get("risk_level", 0.5)
         rl_colour = "green" if rl < 0.3 else "yellow" if rl < 0.7 else "red"
         status = phase.get("status", "planned")
-        status_style = "green" if status == "completed" else "yellow" if status == "in_progress" else "red"
+        status_style = (
+            "green" if status == "completed" else "yellow" if status == "in_progress" else "red"
+        )
 
         table.add_row(
             phase.get("name", "?"),
@@ -810,6 +844,7 @@ def sandbox_stop() -> None:
 @sandbox_app.command("status")
 def sandbox_status() -> None:
     """Check the sandbox environment status."""
+
     async def _run() -> None:
         sandbox = SandboxManager()
         try:
@@ -909,16 +944,18 @@ def agents_list(
     ),
 ) -> None:
     """List registered agents, optionally filtered by personality."""
+
     async def _run() -> None:
         _, registry = await _init_router_and_registry()
 
-        agents = (
-            registry.list_by_personality(persona) if persona
-            else registry.list_all()
-        )
+        agents = registry.list_by_personality(persona) if persona else registry.list_all()
 
         if not agents:
-            msg = f"No agents with personality '{persona}' found." if persona else "No agents registered."
+            msg = (
+                f"No agents with personality '{persona}' found."
+                if persona
+                else "No agents registered."
+            )
             console.print(f"[dim]{msg}[/dim]")
             return
 
@@ -956,6 +993,7 @@ def agents_info(
     agent_name: str = typer.Argument(..., help="Name of the agent to inspect"),
 ) -> None:
     """Show detailed information about a specific agent."""
+
     async def _run() -> None:
         _, registry = await _init_router_and_registry()
         agent = registry.get(agent_name)
@@ -1016,6 +1054,7 @@ def ai_callback(ctx: typer.Context) -> None:
 @ai_app.command("status")
 def ai_status_cmd() -> None:
     """Show AI provider status."""
+
     async def _run() -> None:
         router, _ = await _init_router_and_registry()
         _display_ai_status(router)
@@ -1029,12 +1068,15 @@ def ai_status_cmd() -> None:
 @ai_app.command("models")
 def ai_models() -> None:
     """List available models from all providers."""
+
     async def _run() -> None:
         router, _ = await _init_router_and_registry()
         ai_status = router._status
 
         if not ai_status or not ai_status.providers:
-            console.print("[yellow]⚠ No providers available. Configure with [bold]tdt onboard[/bold].[/yellow]")
+            console.print(
+                "[yellow]⚠ No providers available. Configure with [bold]tdt onboard[/bold].[/yellow]"
+            )
             return
 
         for ptype, pstatus in ai_status.providers.items():
@@ -1098,7 +1140,8 @@ def ai_generate(
     """Generate text using the best available AI provider."""
     console.print(
         Panel(
-            f"[italic]{prompt[:120]}...[/italic]" if len(prompt) > 120
+            f"[italic]{prompt[:120]}...[/italic]"
+            if len(prompt) > 120
             else f"[italic]{prompt}[/italic]",
             title=f"🤖 Generating{_personality_emoji(persona) if persona else ''}",
             border_style="cyan",
@@ -1130,7 +1173,13 @@ def ai_generate(
                 except json.JSONDecodeError:
                     console.print(Syntax(result.text, "json", theme="monokai"))
             else:
-                syntax = Syntax(result.text, "python" if result.text.strip().startswith(("def ", "class ", "import ", "from ")) else "markdown", theme="monokai")
+                syntax = Syntax(
+                    result.text,
+                    "python"
+                    if result.text.strip().startswith(("def ", "class ", "import ", "from "))
+                    else "markdown",
+                    theme="monokai",
+                )
                 console.print(Panel(syntax, border_style="cyan"))
 
             # Footer metadata
@@ -1143,9 +1192,7 @@ def ai_generate(
             footer.add_row("Tokens", str(result.tokens_used))
             footer.add_row("Speed", f"{result.tokens_per_second:.1f} tok/s")
 
-            console.print(
-                Panel(footer, title="⚡ Generation Info", border_style="cyan")
-            )
+            console.print(Panel(footer, title="⚡ Generation Info", border_style="cyan"))
 
         except RuntimeError as exc:
             console.print(f"[red]✗ {exc}[/red]")
@@ -1191,7 +1238,9 @@ def _display_ai_status(router: AIRouter) -> None:
 
     for ptype, pstatus in ai_status.providers.items():
         avail = "[green]✓[/green]" if pstatus.available else "[red]✗[/red]"
-        tiers = ", ".join(f"[cyan]{t.value}[/cyan]" for t in sorted(pstatus.tiers, key=lambda t: t.value))
+        tiers = ", ".join(
+            f"[cyan]{t.value}[/cyan]" for t in sorted(pstatus.tiers, key=lambda t: t.value)
+        )
         model_count = str(len(pstatus.models))
         latency = f"{pstatus.latency_ms:.0f}ms" if pstatus.latency_ms else "—"
 
@@ -1240,6 +1289,7 @@ def benchmark_run(
     ),
 ) -> None:
     """Run a benchmark suite against agent personalities."""
+
     async def _run() -> None:
         from tdt.benchmark.runner import BenchmarkRunner
 
@@ -1248,12 +1298,20 @@ def benchmark_run(
 
         runner = BenchmarkRunner(ai_router=router, agent_registry=registry, sandbox=sandbox)
 
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as pbar:
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        ) as pbar:
             pbar.add_task(description=f"Running {suite} benchmark...", total=None)
-            reports = await runner.run_all_benchmarks() if suite == "all" else {suite: await runner.run_xbow_benchmark()}
+            reports = (
+                await runner.run_all_benchmarks()
+                if suite == "all"
+                else {suite: await runner.run_xbow_benchmark()}
+            )
 
         for name, report in reports.items():
-            t = Table(title=f"📊 {name.upper()} Benchmark", box=box.SIMPLE, header_style="bold cyan")
+            t = Table(
+                title=f"📊 {name.upper()} Benchmark", box=box.SIMPLE, header_style="bold cyan"
+            )
             t.add_column("Metric", style="bold")
             t.add_column("Value", justify="right")
             t.add_row("Total", str(report.total_challenges))
@@ -1281,7 +1339,13 @@ def benchmark_run(
                 pt.add_column("Rate", justify="right")
                 pt.add_column("Avg ms", justify="right")
                 for pers, brk in sorted(report.by_personality.items()):
-                    pt.add_row(pers, str(brk.passed), str(brk.total), f"{brk.pass_rate:.0f}%", f"{brk.avg_duration:.0f}")
+                    pt.add_row(
+                        pers,
+                        str(brk.passed),
+                        str(brk.total),
+                        f"{brk.pass_rate:.0f}%",
+                        f"{brk.avg_duration:.0f}",
+                    )
                 console.print(pt)
 
     try:
@@ -1296,7 +1360,12 @@ def benchmark_run(
 @benchmark_app.command("report")
 def benchmark_report() -> None:
     """Display the latest benchmark report."""
-    console.print(Panel("[yellow]⚠ No saved benchmark reports yet. Run [bold]tdt benchmark run[/bold] first.[/yellow]", title="📊 Benchmark Report"))
+    console.print(
+        Panel(
+            "[yellow]⚠ No saved benchmark reports yet. Run [bold]tdt benchmark run[/bold] first.[/yellow]",
+            title="📊 Benchmark Report",
+        )
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

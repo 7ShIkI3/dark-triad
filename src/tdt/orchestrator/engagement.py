@@ -15,9 +15,9 @@ from typing import Any
 import structlog
 
 from tdt.agents.base import AgentResult, AgentStep
-from tdt.agents.orchestrator import MissionPhase, MissionPlan
 from tdt.agents.registry import AgentRegistry
 from tdt.core.ai_router import AIRouter, ModelTier
+from tdt.orchestrator.shared import MissionPhase, MissionPlan
 
 logger = structlog.get_logger(__name__)
 
@@ -155,11 +155,21 @@ _DEFAULT_ROE_TEMPLATE: dict[str, Any] = {
     "authorized_targets": [],
     "excluded_targets": [],
     "authorized_techniques": [
-        "T1590", "T1592", "T1595", "T1046", "T1580",
-        "T1210", "T1203", "T1190", "T1059",
+        "T1590",
+        "T1592",
+        "T1595",
+        "T1046",
+        "T1580",
+        "T1210",
+        "T1203",
+        "T1190",
+        "T1059",
     ],
     "prohibited_techniques": [
-        "T1485", "T1490", "T1486", "T1561",
+        "T1485",
+        "T1490",
+        "T1486",
+        "T1561",
     ],
     "time_window": {"start": "2025-01-01T00:00:00Z", "end": "2025-01-14T23:59:59Z"},
     "allowed_hours": ["09:00-17:00"],
@@ -175,8 +185,16 @@ _DEFAULT_CONOPS_TEMPLATE: dict[str, Any] = {
     "overview": "Simulated adversarial operation to assess detection and response capabilities.",
     "key_assets": ["domain_controllers", "file_servers", "web_applications"],
     "threat_model": "Advanced Persistent Threat (APT) with initial access via spearphishing.",
-    "success_criteria": ["C2 beacon established", "Lateral movement to crown jewels", "Data exfiltration detected"],
-    "exit_criteria": ["All implants removed", "Persistence mechanisms cleaned", "No forensic traces left"],
+    "success_criteria": [
+        "C2 beacon established",
+        "Lateral movement to crown jewels",
+        "Data exfiltration detected",
+    ],
+    "exit_criteria": [
+        "All implants removed",
+        "Persistence mechanisms cleaned",
+        "No forensic traces left",
+    ],
     "communication_plan": "Secure out-of-band channel. Daily sync at 0900 UTC.",
     "reporting_frequency": "daily",
 }
@@ -222,8 +240,9 @@ class EngagementBuilder:
         plan = MissionPlan(
             objective=objective,
             phases=self._default_phases_for_personality(personality, objective),
-            estimated_duration=self._estimate_duration(personality),
-            risk_level=self._estimate_risk(personality),
+            estimated_duration=30,
+            risk_level=0.5,
+            created_at=datetime.now(UTC).isoformat(),
         )
 
         conops = await self.generate_conops(objective, plan)
@@ -281,7 +300,9 @@ class EngagementBuilder:
         data.setdefault("allowed_hours", _DEFAULT_ROE_TEMPLATE["allowed_hours"])
         data.setdefault("data_handling", _DEFAULT_ROE_TEMPLATE["data_handling"])
         data.setdefault("deconfliction_procedure", _DEFAULT_ROE_TEMPLATE["deconfliction_procedure"])
-        data.setdefault("emergency_stop_procedure", _DEFAULT_ROE_TEMPLATE["emergency_stop_procedure"])
+        data.setdefault(
+            "emergency_stop_procedure", _DEFAULT_ROE_TEMPLATE["emergency_stop_procedure"]
+        )
         data.setdefault("points_of_contact", _DEFAULT_ROE_TEMPLATE["points_of_contact"])
         data.setdefault("risk_acceptance", _DEFAULT_ROE_TEMPLATE["risk_acceptance"])
         data.setdefault("legal_basis", _DEFAULT_ROE_TEMPLATE["legal_basis"])
@@ -363,11 +384,11 @@ class EngagementBuilder:
             technique_ids = _MITRE_MAP.get(mp.name, [f"T{1000 + i}"])
             opp_phases.append(
                 OPPhase(
-                    phase_number=mp.phase_num,
+                    phase_number=mp.phase_number,
                     name=mp.name,
-                    objective=mp.task,
+                    objective=mp.objective,
                     techniques=technique_ids,
-                    agents_assigned=[mp.agent] if mp.agent else [],
+                    agents_assigned=[mp.agent_name] if mp.agent_name else [],
                     estimated_duration="TBD",
                     success_indicators=[f"{mp.name}_completed"],
                     fallback=f"Skip {mp.name} and proceed to next phase",
@@ -384,9 +405,7 @@ class EngagementBuilder:
             mitre_mapping=mitre_mapping,
             resources_required=["C2 infrastructure", "Phishing platform", "Scanning tools"],
             timeline=timeline,
-            contingency_plans=[
-                f"Phase {p.name} failure: {p.fallback}" for p in opp_phases
-            ],
+            contingency_plans=[f"Phase {p.name} failure: {p.fallback}" for p in opp_phases],
         )
 
     async def map_to_mitre(
@@ -403,7 +422,7 @@ class EngagementBuilder:
             if p.name in _MITRE_MAP:
                 mapping[p.name] = list(_MITRE_MAP[p.name])
             else:
-                mapping[p.name] = [f"T{1000 + p.phase_num}"]
+                mapping[p.name] = [f"T{1000 + p.phase_number}"]
         return mapping
 
     # ── Internal helpers ──────────────────────────────────────────────────
@@ -416,21 +435,75 @@ class EngagementBuilder:
         persona = personality.strip().lower()
         if persona == "narcissism":
             return [
-                MissionPhase(phase_num=1, name="full_assault", agent="narcissus", task=objective, depends_on=[]),
+                MissionPhase(
+                    phase_number=1,
+                    name="full_assault",
+                    agent_name="narcissus",
+                    objective=objective,
+                    depends_on=[],
+                ),
             ]
         elif persona == "psychopathy":
             return [
-                MissionPhase(phase_num=1, name="active_scan", agent="psychopath", task=f"Scan {objective}", depends_on=[]),
-                MissionPhase(phase_num=2, name="exploit_execution", agent="psychopath", task=f"Exploit {objective}", depends_on=[]),
-                MissionPhase(phase_num=3, name="post_exploit_verify", agent="psychopath", task=f"Verify {objective}", depends_on=["exploit_execution"]),
+                MissionPhase(
+                    phase_number=1,
+                    name="active_scan",
+                    agent_name="psychopath",
+                    objective=f"Scan {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=2,
+                    name="exploit_execution",
+                    agent_name="psychopath",
+                    objective=f"Exploit {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=3,
+                    name="post_exploit_verify",
+                    agent_name="psychopath",
+                    objective=f"Verify {objective}",
+                    depends_on=["exploit_execution"],
+                ),
             ]
         else:
             return [
-                MissionPhase(phase_num=1, name="passive_recon", agent="machiavelli", task=f"Recon {objective}", depends_on=[]),
-                MissionPhase(phase_num=2, name="active_scan", agent="machiavelli", task=f"Scan {objective}", depends_on=["passive_recon"]),
-                MissionPhase(phase_num=3, name="vulnerability_analysis", agent="machiavelli", task=f"Analyze {objective}", depends_on=["active_scan"]),
-                MissionPhase(phase_num=4, name="exploit_selection", agent="machiavelli", task=f"Select exploit for {objective}", depends_on=["vulnerability_analysis"]),
-                MissionPhase(phase_num=5, name="exploit_execution", agent="machiavelli", task=f"Execute {objective}", depends_on=["exploit_selection"]),
+                MissionPhase(
+                    phase_number=1,
+                    name="passive_recon",
+                    agent_name="machiavelli",
+                    objective=f"Recon {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=2,
+                    name="active_scan",
+                    agent_name="machiavelli",
+                    objective=f"Scan {objective}",
+                    depends_on=["passive_recon"],
+                ),
+                MissionPhase(
+                    phase_number=3,
+                    name="vulnerability_analysis",
+                    agent_name="machiavelli",
+                    objective=f"Analyze {objective}",
+                    depends_on=["active_scan"],
+                ),
+                MissionPhase(
+                    phase_number=4,
+                    name="exploit_selection",
+                    agent_name="machiavelli",
+                    objective=f"Select exploit for {objective}",
+                    depends_on=["vulnerability_analysis"],
+                ),
+                MissionPhase(
+                    phase_number=5,
+                    name="exploit_execution",
+                    agent_name="machiavelli",
+                    objective=f"Execute {objective}",
+                    depends_on=["exploit_selection"],
+                ),
             ]
 
     def _estimate_duration(self, personality: str) -> str:
@@ -484,8 +557,8 @@ class MissionPlanner:
         return MissionPlan(
             objective=objective,
             phases=assigned,
-            estimated_duration=self._estimate_duration(personality),
-            risk_level=self._estimate_risk(personality),
+            estimated_duration=300,
+            risk_level=0.5,
         )
 
     async def decompose(
@@ -498,23 +571,89 @@ class MissionPlanner:
 
         if persona == "narcissism":
             return [
-                MissionPhase(phase_num=1, name="full_assault", agent="", task=objective, depends_on=[]),
+                MissionPhase(
+                    phase_number=1,
+                    name="full_assault",
+                    agent_name="",
+                    objective=objective,
+                    depends_on=[],
+                ),
             ]
         elif persona == "psychopathy":
             return [
-                MissionPhase(phase_num=1, name="active_scan", agent="", task=f"Active scan of {objective}", depends_on=[]),
-                MissionPhase(phase_num=2, name="vulnerability_analysis", agent="", task=f"Vulnerability scan of {objective}", depends_on=[]),
-                MissionPhase(phase_num=3, name="exploit_execution", agent="", task=f"Rapid exploitation of {objective}", depends_on=[]),
-                MissionPhase(phase_num=4, name="lateral_movement", agent="", task=f"Pivot from {objective}", depends_on=[]),
+                MissionPhase(
+                    phase_number=1,
+                    name="active_scan",
+                    agent_name="",
+                    objective=f"Active scan of {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=2,
+                    name="vulnerability_analysis",
+                    agent_name="",
+                    objective=f"Vulnerability scan of {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=3,
+                    name="exploit_execution",
+                    agent_name="",
+                    objective=f"Rapid exploitation of {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=4,
+                    name="lateral_movement",
+                    agent_name="",
+                    objective=f"Pivot from {objective}",
+                    depends_on=[],
+                ),
             ]
         else:
             return [
-                MissionPhase(phase_num=1, name="passive_recon", agent="", task=f"Passive reconnaissance on {objective}", depends_on=[]),
-                MissionPhase(phase_num=2, name="active_scan", agent="", task=f"Active scanning of {objective}", depends_on=["passive_recon"]),
-                MissionPhase(phase_num=3, name="vulnerability_analysis", agent="", task=f"Vulnerability assessment of {objective}", depends_on=["active_scan"]),
-                MissionPhase(phase_num=4, name="exploit_selection", agent="", task=f"Select appropriate exploit for {objective}", depends_on=["vulnerability_analysis"]),
-                MissionPhase(phase_num=5, name="exploit_execution", agent="", task=f"Execute selected exploit against {objective}", depends_on=["exploit_selection"]),
-                MissionPhase(phase_num=6, name="post_exploit_verify", agent="", task=f"Verify access on {objective}", depends_on=["exploit_execution"]),
+                MissionPhase(
+                    phase_number=1,
+                    name="passive_recon",
+                    agent_name="",
+                    objective=f"Passive reconnaissance on {objective}",
+                    depends_on=[],
+                ),
+                MissionPhase(
+                    phase_number=2,
+                    name="active_scan",
+                    agent_name="",
+                    objective=f"Active scanning of {objective}",
+                    depends_on=["passive_recon"],
+                ),
+                MissionPhase(
+                    phase_number=3,
+                    name="vulnerability_analysis",
+                    agent_name="",
+                    objective=f"Vulnerability assessment of {objective}",
+                    depends_on=["active_scan"],
+                ),
+                MissionPhase(
+                    phase_number=4,
+                    name="exploit_selection",
+                    agent_name="",
+                    objective=f"Select appropriate exploit for {objective}",
+                    depends_on=["vulnerability_analysis"],
+                ),
+                MissionPhase(
+                    phase_number=5,
+                    name="exploit_execution",
+                    agent_name="",
+                    objective=f"Execute selected exploit against {objective}",
+                    depends_on=["exploit_selection"],
+                ),
+                MissionPhase(
+                    phase_number=6,
+                    name="post_exploit_verify",
+                    agent_name="",
+                    objective=f"Verify access on {objective}",
+                    depends_on=["exploit_execution"],
+                ),
             ]
 
     async def assign_agents(
@@ -550,10 +689,10 @@ class MissionPlanner:
                 agent = "narcissus"
             assigned.append(
                 MissionPhase(
-                    phase_num=p.phase_num,
+                    phase_number=p.phase_number,
                     name=p.name,
-                    agent=agent,
-                    task=p.task,
+                    agent_name=agent,
+                    objective=p.objective,
                     depends_on=list(p.depends_on),
                 )
             )
@@ -624,29 +763,35 @@ class BattleManager:
         Returns:
             Agent execution result.
         """
-        agent = self.registry.get(phase.agent)
+        agent = self.registry.get(phase.agent_name)
         if agent is None:
             return AgentResult(
-                agent_name=phase.agent,
+                agent_name=phase.agent_name,
                 personality=personality,
-                objective=phase.task,
+                objective=phase.objective,
                 success=False,
-                output=f"Agent '{phase.agent}' not found in registry",
+                output=f"Agent '{phase.agent_name}' not found in registry",
                 steps=[
-                    AgentStep(step_number=1, action="dispatch", tool=phase.agent,
-                              result="Agent unavailable"),
+                    AgentStep(
+                        step_number=1,
+                        action="dispatch",
+                        tool=phase.agent_name,
+                        result="Agent unavailable",
+                    ),
                 ],
                 duration_ms=0.0,
             )
 
         try:
-            result = await agent.execute(phase.task, {"phase": phase.name, "personality": personality})
+            result = await agent.execute(
+                phase.objective, {"phase": phase.name, "personality": personality}
+            )
             return result
         except Exception as exc:
             return AgentResult(
-                agent_name=phase.agent,
+                agent_name=phase.agent_name,
                 personality=personality,
-                objective=phase.task,
+                objective=phase.objective,
                 success=False,
                 output=f"Phase execution failed: {exc}",
                 steps=[],
@@ -715,16 +860,16 @@ class DeconflictionEngine:
         # Check for duplicate phase numbers
         seen_numbers: set[int] = set()
         for p in phases:
-            if p.phase_num in seen_numbers:
+            if p.phase_number in seen_numbers:
                 conflicts.append(
                     Conflict(
                         type="duplicate_phase_number",
-                        description=f"Duplicate phase number {p.phase_num}",
+                        description=f"Duplicate phase number {p.phase_number}",
                         phase_names=[p.name],
                         severity="low",
                     )
                 )
-            seen_numbers.add(p.phase_num)
+            seen_numbers.add(p.phase_number)
 
         return conflicts
 
@@ -751,7 +896,7 @@ class DeconflictionEngine:
                 resolution="Add missing phase or remove dependency reference",
                 adjusted_phases=[conflict.phase_names[0]] if conflict.phase_names else [],
                 notes=f"Phase '{conflict.phase_names[0] if conflict.phase_names else '?'}' "
-                       f"references non-existent dependency. Remove dependency or create phase.",
+                f"references non-existent dependency. Remove dependency or create phase.",
             )
         elif conflict.type == "duplicate_phase_number":
             resolution = ConflictResolution(

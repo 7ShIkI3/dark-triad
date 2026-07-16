@@ -128,6 +128,7 @@ class BenchmarkRunner:
 
         tools_used: list[str] = []
         error: str | None = None
+        success = challenge.expected_success
         start = time.perf_counter()
 
         try:
@@ -146,13 +147,16 @@ class BenchmarkRunner:
                 prompt=prompt,
                 json_mode=False,
             )
-            success = challenge.expected_success
             # Extract tool names from the response text (basic heuristic)
             if response and response.text:
                 for line in response.text.splitlines():
                     line = line.strip().lower()
                     if line.startswith("tool:") or line.startswith("- "):
-                        tool = line.split(":", 1)[-1].strip() if ":" in line else line.strip("- ").strip()
+                        tool = (
+                            line.split(":", 1)[-1].strip()
+                            if ":" in line
+                            else line.strip("- ").strip()
+                        )
                         if tool and tool not in tools_used:
                             tools_used.append(tool)
 
@@ -210,21 +214,22 @@ class BenchmarkRunner:
             "",
         ]
         for name, report in reports.items():
-            lines.extend([
-                f"  Suite: {name.upper()}",
-                f"  Total:  {report.total_challenges}",
-                f"  Passed: {report.passed}",
-                f"  Failed: {report.failed}",
-                f"  Rate:   {report.pass_rate:.1f}%",
-                f"  Avg:    {report.avg_duration_ms:.0f} ms",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"  Suite: {name.upper()}",
+                    f"  Total:  {report.total_challenges}",
+                    f"  Passed: {report.passed}",
+                    f"  Failed: {report.failed}",
+                    f"  Rate:   {report.pass_rate:.1f}%",
+                    f"  Avg:    {report.avg_duration_ms:.0f} ms",
+                    "",
+                ]
+            )
             if report.by_difficulty:
                 lines.append("  ── By Difficulty ──")
                 for diff, brk in sorted(report.by_difficulty.items()):
                     lines.append(
-                        f"    {diff:12s}  {brk.passed}/{brk.total}  "
-                        f"({brk.pass_rate:.0f}%)"
+                        f"    {diff:12s}  {brk.passed}/{brk.total}  ({brk.pass_rate:.0f}%)"
                     )
                 lines.append("")
             if report.by_personality:

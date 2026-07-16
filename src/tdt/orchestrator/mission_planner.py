@@ -12,11 +12,7 @@ Personality-driven planning strategies:
 
 from __future__ import annotations
 
-import enum
 import json
-import uuid
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 import networkx as nx  # type: ignore[import-untyped]
@@ -26,112 +22,13 @@ from tdt.agents.registry import AgentRegistry
 from tdt.core.ai_router import AIRouter, ModelTier
 from tdt.core.personality import PersonalityMode
 from tdt.core.sandbox import SandboxManager
+from tdt.orchestrator.shared import (
+    MissionPhase,
+    MissionPlan,
+    PhaseStatus,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-# ── Enums ─────────────────────────────────────────────────────────────────────
-
-
-class PhaseStatus(enum.Enum):
-    """Execution status of a single mission phase."""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
-# ── Rich Dataclasses ──────────────────────────────────────────────────────────
-
-
-@dataclass(slots=True)
-class MissionPhase:
-    """A single phase within a decomposed mission plan.
-
-    Richer than the stub in :mod:`tdt.agents.orchestrator` — carries
-    agent assignment, personality overrides, estimated duration, risk,
-    tool/command lists, exit conditions, and success criteria.
-    """
-
-    # ── Required fields (no defaults) ─────────────────────────────────────
-    id: str
-    phase_number: int
-    name: str
-    description: str
-    agent_name: str
-    agent_category: str
-    objective: str
-
-    # ── Optional fields with default values ───────────────────────────────
-    personality_override: str | None = None
-    tools: list[str] = field(default_factory=list)
-    commands: list[str] = field(default_factory=list)
-    depends_on: list[str] = field(default_factory=list)
-    estimated_duration: int = 30  # seconds
-    risk_level: float = 0.5  # 0.0 → 1.0
-    exit_conditions: list[str] = field(default_factory=list)
-    success_criteria: list[str] = field(default_factory=list)
-    status: str = PhaseStatus.PENDING.value
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            self.id = f"phase_{self.phase_number}"
-
-
-@dataclass(slots=True)
-class MissionPlan:
-    """Complete decomposed mission plan with phases, estimates, and metadata.
-
-    Richer than the stub in :mod:`tdt.agents.orchestrator` — includes
-    UUID, ISO timestamp, structured constraints, and typed estimates.
-    """
-
-    mission_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    objective: str = ""
-    personality: str = PersonalityMode.MACHIAVELLIANISM.value
-    phases: list[MissionPhase] = field(default_factory=list)
-    constraints: dict[str, Any] = field(default_factory=dict)
-
-    # Computed fields (set during planning)
-    status: str = "planned"
-    total_phases: int = 0
-    estimated_duration: int = 0  # total seconds
-    risk_level: float = 0.0  # aggregate 0.0 → 1.0
-    created_at: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
-
-    def __post_init__(self) -> None:
-        self.total_phases = len(self.phases)
-
-    def asdict(self) -> dict[str, Any]:
-        """Return a plain dict suitable for serialisation / logging."""
-        return {
-            "mission_id": self.mission_id,
-            "objective": self.objective,
-            "personality": self.personality,
-            "total_phases": self.total_phases,
-            "estimated_duration": self.estimated_duration,
-            "risk_level": self.risk_level,
-            "status": self.status,
-            "created_at": self.created_at,
-            "phases": [
-                {
-                    "id": p.id,
-                    "phase_number": p.phase_number,
-                    "name": p.name,
-                    "agent_name": p.agent_name,
-                    "agent_category": p.agent_category,
-                    "depends_on": p.depends_on,
-                    "estimated_duration": p.estimated_duration,
-                    "risk_level": p.risk_level,
-                    "status": p.status,
-                }
-                for p in self.phases
-            ],
-        }
 
 
 # ── Personality strategy constants ────────────────────────────────────────────
@@ -526,9 +423,7 @@ class MissionPlanner:
                 continue
             tpl = dict(_PHASE_TEMPLATES[tpl_name])
             tpl["name"] = tpl_name
-            tpl["description"] = tpl["description"].replace(
-                "target", objective
-            )
+            tpl["description"] = tpl["description"].replace("target", objective)
             existing.append(tpl)
         return existing
 
@@ -649,7 +544,7 @@ class MissionPlanner:
                 risk_level=float(raw.get("risk_level", 0.5)),
                 exit_conditions=raw.get("exit_conditions", []),
                 success_criteria=raw.get("success_criteria", []),
-                status=PhaseStatus.PENDING.value,
+                status=PhaseStatus.PENDING,
             )
             assigned.append(phase)
             self._log.debug(
