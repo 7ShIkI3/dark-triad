@@ -6,10 +6,11 @@ Tests define the expected interface and verify it works once the module lands.
 
 from __future__ import annotations
 
+import httpx
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -401,3 +402,372 @@ class TestAIRouter:
         router.config.airgap_mode = True
         selected = router.select_provider()
         assert selected == ProviderType.LOCAL
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tests pour le vrai AI Router (src/tdt/core/ai_router.py)
+# — mock httpx pour DeepSeek API + Ollama fallback
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def real_router():
+    """Build un AIRouter pré-initialisé avec providers mockés.
+
+    Retourne un tuple (router, deepseek_status, ollama_status) pour
+    permettre aux tests de manipuler les providers.
+    """
+    from tdt.core.ai_router import (
+        AIRouter,
+        AIRouterConfig,
+        AIStatus,
+        ModelInfo,
+        ModelTier,
+        ProviderStatus,
+        ProviderType,
+    )
+
+    cfg = AIRouterConfig()
+    cfg.deepseek_api_key = "sk-test-key"
+    r = AIRouter()
+    r.config = cfg
+    r._http = AsyncMock()
+
+    # DeepSeek — HEAVY tier, uncensored (cloud)
+    ds = ProviderStatus(
+        type=ProviderType.DEEPSEEK,
+        available=True,
+        models=[
+            ModelInfo(
+                name="deepseek-chat",
+                tier=ModelTier.HEAVY,
+                uncensored=True,
+                local=False,
+                context_window=64000,
+            )
+        ],
+        tiers={ModelTier.HEAVY},
+    )
+    # Ollama — HEAVY + LIGHT tiers (local)
+    ol = ProviderStatus(
+        type=ProviderType.OLLAMA,
+        available=True,
+        models=[
+            ModelInfo(
+                name="llama3:70b",
+                tier=ModelTier.HEAVY,
+                uncensored=False,
+                local=True,
+                context_window=8192,
+            ),
+            ModelInfo(
+                name="llama3:8b",
+                tier=ModelTier.LIGHT,
+                uncensored=False,
+                local=True,
+                context_window=8192,
+            ),
+        ],
+        tiers={ModelTier.HEAVY, ModelTier.LIGHT},
+    )
+    r._status = AIStatus(providers={ProviderType.DEEPSEEK: ds, ProviderType.OLLAMA: ol})
+    return r
+
+
+class TestRealAIRouter:
+    """8 tests pour le vrai AI Router (DeepSeek API + Ollama fallback)."""
+
+    # ── 1. Appel DeepSeek réussi ─────────────────────────────────────────────
+
+    async def test_deepseek_api_call(self, real_router):
+        """Mock httpx.AsyncClient.post → vérifie l'appel DeepSeek et le parsing."""
+        from tdt.core.ai_router import ModelTier, ProviderType
+
+        router = real_router
+        router.config.default_tier = ModelTier.HEAVY
+
+        # Mock réponse HTTP de DeepSeek
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "Bonjour de DeepSeek!"}, "finish_reason": "stop"}],
+            "usage": {"total_tokens": 42},
+        }
+        router._http.post.return_value = mock_resp
+
+        result = await router.generate("Test prompt", tier=ModelTier.HEAVY)
+
+        assert result.text == "Bonjour de DeepSeek!"
+        assert result.provider == ProviderType.DEEPSEEK
+        assert result.model == "deepseek-chat"
+        assert result.tokens_used == 42
+        assert result.finish_reason == "stop"
+        assert result.tokens_per_second >= 0
+
+        # Vérifie que l'appel httpx a bien été fait
+        router._http.post.assert_awaited_once()
+
+    # ── 2. Erreur HTTP DeepSeek → fallback Ollama ────────────────────────────
+
+    async def test_deepseek_api_error(self, real_router):
+        """Mock httpx → HTTPError → fallback vers Ollama."""
+        from tdt.core.ai_router import ModelTier, ProviderType
+
+        router = real_router
+        router.config.default_tier = ModelTier.HEAVY
+
+        # _call_deepseek lève une exception → simulateur d'erreur API
+        router._call_deepseek = AsyncMock(
+            side_effect=RuntimeError("DeepSeek API error 401: Unauthorized")
+        )
+
+        # _bidirectional_fallback doit trouver Ollama.
+        # On mocke la méthode pour qu'elle retourne Ollama directement.
+        mocked_model = router._status.providers[ProviderType.OLLAMA].models[0]
+        router._bidirectional_fallback = AsyncMock(
+            return_value=(ProviderType.OLLAMA, mocked_model)
+        )
+
+        # _call_ollama réussit
+        router._call_ollama = AsyncMock(
+            return_value={
+                "text": "Réponse depuis Ollama (fallback)",
+                "finish_reason": "stop",
+                "tokens_used": 20,
+            }
+        )
+
+        result = await router.generate("Test prompt", tier=ModelTier.HEAVY)
+
+        assert result.provider == ProviderType.OLLAMA
+        assert "Ollama" in result.text
+        assert result.tokens_used == 20
+        router._call_deepseek.assert_awaited_once()
+        router._call_ollama.assert_awaited_once()
+
+    # ── 3. Fallback Ollama — vérification du contenu ─────────────────────────
+
+    async def test_ollama_fallback(self, real_router):
+        """Mock httpx erreur → mock Ollama succès → vérifie le résultat."""
+        from tdt.core.ai_router import ModelTier, ProviderType
+
+        router = real_router
+        router.config.default_tier = ModelTier.HEAVY
+
+        # DeepSeek échoue
+        router._call_deepseek = AsyncMock(
+            side_effect=RuntimeError("DeepSeek API error 500")
+        )
+
+        # Fallback vers Ollama
+        mocked_model = router._status.providers[ProviderType.OLLAMA].models[0]
+        router._bidirectional_fallback = AsyncMock(
+            return_value=(ProviderType.OLLAMA, mocked_model)
+        )
+
+        ollama_text = "Analyse terminée. Résultat: tout est sécurisé."
+        router._call_ollama = AsyncMock(
+            return_value={
+                "text": ollama_text,
+                "finish_reason": "stop",
+                "tokens_used": 35,
+            }
+        )
+
+        result = await router.generate("Scan réseau", tier=ModelTier.HEAVY)
+
+        assert result.provider == ProviderType.OLLAMA
+        assert result.text == ollama_text
+        assert result.tokens_used == 35
+        # Vérifie le contenu réel du fallback (pas un placeholder)
+        assert "Analyse" in result.text
+        assert "sécurisé" in result.text
+
+    # ── 4. Clé API depuis les variables d'environnement ──────────────────────
+
+    async def test_deepseek_api_key_from_env(self):
+        """Mock os.environ → la clé DEEPSEEK_API_KEY est lue à la création."""
+        from tdt.core.ai_router import AIRouter
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-from-env-123"}, clear=False):
+            router = AIRouter()
+            # _apply_config n'est appelé que si providers_config est fourni,
+            # donc on l'appelle explicitement comme le ferait le vrai code.
+            router._apply_config({"deepseek_api_key": None})
+
+        assert router.config.deepseek_api_key == "sk-from-env-123"
+
+    # ── 5. System prompt avec personnalité ───────────────────────────────────
+
+    async def test_generate_with_personality(self, real_router):
+        """Vérifie que le system prompt inclut la personnalité demandée."""
+        from tdt.core.ai_router import ModelTier, ProviderType
+
+        router = real_router
+        router.config.default_tier = ModelTier.HEAVY
+
+        # On mocke _call_provider pour capturer l'argument system
+        mock_call = AsyncMock(
+            return_value={
+                "text": "Réponse avec personnalité",
+                "finish_reason": "stop",
+                "tokens_used": 10,
+            }
+        )
+        router._call_provider = mock_call
+
+        await router.generate(
+            "Test prompt",
+            personality="narcissism",
+            tier=ModelTier.HEAVY,
+        )
+
+        # Vérifie que _call_provider a reçu le bon system prompt
+        call_kwargs = mock_call.call_args[1]
+        system_prompt = call_kwargs.get("system", "")
+        assert system_prompt is not None
+        assert "Narcissus" in system_prompt
+
+    # ── 6. Timeout → RuntimeError ────────────────────────────────────────────
+
+    async def test_generate_timeout(self):
+        """Timeout httpx → RuntimeError quand aucun fallback n'est disponible."""
+        from tdt.core.ai_router import (
+            AIRouter,
+            AIRouterConfig,
+            AIStatus,
+            ModelInfo,
+            ModelTier,
+            ProviderStatus,
+            ProviderType,
+        )
+
+        router = AIRouter()
+        router.config = AIRouterConfig()
+        router.config.deepseek_api_key = "sk-test"
+        router.config.default_tier = ModelTier.HEAVY
+        router._http = AsyncMock()
+
+        # Seul DeepSeek est enregistré — on le rend indisponible après la
+        # sélection initiale pour que _bidirectional_fallback échoue.
+        ds = ProviderStatus(
+            type=ProviderType.DEEPSEEK,
+            available=True,
+            models=[
+                ModelInfo(
+                    name="deepseek-chat",
+                    tier=ModelTier.HEAVY,
+                    uncensored=True,
+                    local=False,
+                )
+            ],
+            tiers={ModelTier.HEAVY},
+        )
+        router._status = AIStatus(providers={ProviderType.DEEPSEEK: ds})
+
+        # Timeout httpx — la première levée déclenche le fallback
+        router._http.post.side_effect = httpx.TimeoutException(
+            "Connection timed out after 30s"
+        )
+
+        # On mocke _bidirectional_fallback pour retourner None :
+        # avec un seul provider qui vient d'échouer, aucun fallback viable.
+        router._bidirectional_fallback = AsyncMock(return_value=None)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await router.generate("Test prompt", tier=ModelTier.HEAVY)
+
+        assert "fallback" in str(excinfo.value).lower()
+
+    # ── 7. Pas de clé API → fallback direct Ollama ───────────────────────────
+
+    async def test_no_api_key_fallback(self):
+        """Pas de DEEPSEEK_API_KEY → DeepSeek indisponible → fallback Ollama."""
+        from tdt.core.ai_router import (
+            AIRouter,
+            AIRouterConfig,
+            AIStatus,
+            ModelInfo,
+            ModelTier,
+            ProviderStatus,
+            ProviderType,
+        )
+
+        router = AIRouter()
+        router.config = AIRouterConfig()
+        router.config.deepseek_api_key = None  # Pas de clé
+        router.config.default_tier = ModelTier.HEAVY
+        router._http = AsyncMock()
+
+        # DeepSeek absent (comme si le scan avait échoué faute de clé)
+        # Ollama disponible en HEAVY
+        ol = ProviderStatus(
+            type=ProviderType.OLLAMA,
+            available=True,
+            models=[
+                ModelInfo(
+                    name="llama3:70b",
+                    tier=ModelTier.HEAVY,
+                    uncensored=False,
+                    local=True,
+                )
+            ],
+            tiers={ModelTier.HEAVY},
+        )
+        router._status = AIStatus(providers={ProviderType.OLLAMA: ol})
+
+        # Mock réponse Ollama
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "message": {"content": "Ollama a répondu (fallback sans clé)"},
+            "prompt_eval_count": 8,
+            "eval_count": 12,
+        }
+        router._http.post.return_value = mock_resp
+
+        result = await router.generate("Test prompt", tier=ModelTier.HEAVY)
+
+        assert result.provider == ProviderType.OLLAMA
+        assert "Ollama" in result.text
+        assert result.tokens_used == 20  # 8 + 12
+
+    # ── 8. Parsing réponse JSON ──────────────────────────────────────────────
+
+    async def test_json_response_parsing(self, real_router):
+        """Réponse JSON mock → vérifie l'extraction du content."""
+        from tdt.core.ai_router import ModelTier, ProviderType
+
+        router = real_router
+        router.config.default_tier = ModelTier.HEAVY
+
+        # Mock une réponse JSON complète (comme renvoyée par DeepSeek)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [
+                {
+                    "message": {"content": '{"result": "success", "data": [1, 2, 3]}'},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"total_tokens": 55},
+        }
+        router._http.post.return_value = mock_resp
+
+        result = await router.generate(
+            "Generate JSON output",
+            tier=ModelTier.HEAVY,
+            json_mode=True,
+        )
+
+        # Le texte brut est extrait (pas parsé — le parsing JSON est
+        # géré par l'appelant du routeur)
+        assert result.text == '{"result": "success", "data": [1, 2, 3]}'
+        assert result.provider == ProviderType.DEEPSEEK
+        assert result.tokens_used == 55
+
+        # Vérifie que le payload envoyé contient response_format json_object
+        call_kwargs = router._http.post.call_args[1]
+        payload = call_kwargs.get("json", {})
+        assert payload.get("response_format") == {"type": "json_object"}
