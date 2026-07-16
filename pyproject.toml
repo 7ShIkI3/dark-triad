@@ -67,6 +67,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "src/tdt/agents/post_exploit.py" = ["E501"]
 "src/tdt/orchestrator/engagement.py" = ["E501"]
 "src/tdt/orchestrator/mission_planner.py" = ["E501"]
+"src/tdt/cli/main.py" = ["E501"]
 "tests/test_orchestrator.py" = ["E501"]
 
 [tool.mypy]

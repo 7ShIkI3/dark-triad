@@ -1,0 +1,562 @@
+"""The Dark Triad — FastAPI application.
+
+REST + WebSocket streaming API for mission orchestration,
+AI routing, agent registry, and sandbox management.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+import structlog
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
+
+from tdt.agents.registry import AgentRegistry
+from tdt.core.ai_router import AIRouter
+from tdt.core.sandbox import SandboxManager, SandboxStatus
+from tdt.orchestrator.battle_manager import BattleManager
+from tdt.orchestrator.engagement import EngagementBuilder
+from tdt.orchestrator.mission_planner import (
+    MissionPlanner,
+    PhaseStatus,
+)
+
+logger = structlog.get_logger(__name__)
+
+# ── Version ────────────────────────────────────────────────────────────────────
+__version__ = "0.1.0"
+
+# ── In-memory mission store ────────────────────────────────────────────────────
+_missions: dict[str, dict[str, Any]] = {}
+
+# ── WebSocket connections registry ──────────────────────────────────────────────
+_ws_connections: dict[str, list[WebSocket]] = {}
+
+
+# ── Pydantic Schemas ───────────────────────────────────────────────────────────
+
+
+class PhaseInfo(BaseModel):
+    """Excerpt of a phase used in mission lists/details."""
+
+    id: str
+    name: str
+    status: str
+    result: str | None = None
+
+
+class MissionRequest(BaseModel):
+    """Request body for POST /api/v1/missions."""
+
+    objective: str = Field(..., min_length=1, description="Mission objective")
+    personality: str = Field("mach", description="Agent personality mode")
+    aggression: str = Field("aggressive", description="Aggression level")
+    constraints: dict[str, Any] | None = None
+
+
+class MissionResponse(BaseModel):
+    """Response after creating a mission."""
+
+    mission_id: str
+    plan: dict[str, Any]
+    status: str
+
+
+class MissionListItem(BaseModel):
+    """Summary item in the mission list."""
+
+    mission_id: str
+    objective: str
+    personality: str
+    status: str
+    created_at: str
+
+
+class MissionListResponse(BaseModel):
+    """Response for GET /api/v1/missions."""
+
+    missions: list[MissionListItem]
+
+
+class MissionDetailResponse(BaseModel):
+    """Full mission detail response."""
+
+    mission_id: str
+    plan: dict[str, Any]
+    status: str
+    phases: list[PhaseInfo]
+
+
+class AIStatusResponse(BaseModel):
+    """Response for GET /api/v1/ai/status."""
+
+    providers: dict[str, dict[str, Any]]
+    hardware: dict[str, Any]
+
+
+class ModelInfoSchema(BaseModel):
+    """Model information item."""
+
+    name: str
+    provider: str
+    tier: str
+    uncensored: bool = False
+    local: bool = False
+
+
+class ModelsResponse(BaseModel):
+    """Response for GET /api/v1/ai/models."""
+
+    models: list[ModelInfoSchema]
+
+
+class GenerateRequest(BaseModel):
+    """Request body for POST /api/v1/ai/generate."""
+
+    prompt: str = Field(..., min_length=1)
+    personality: str | None = None
+    json_mode: bool = False
+
+
+class GenerateResponse(BaseModel):
+    """Response from AI generation."""
+
+    text: str
+    model: str
+    provider: str
+    tokens_used: int
+
+
+class AgentInfo(BaseModel):
+    """Agent summary."""
+
+    name: str
+    category: str
+    personality: str
+
+
+class AgentsResponse(BaseModel):
+    """Response for GET /api/v1/agents."""
+
+    agents: list[AgentInfo]
+
+
+class SandboxStatusSchema(BaseModel):
+    """Sandbox status response."""
+
+    running: bool
+    container_id: str | None = None
+    image: str
+    uptime: float = 0.0
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+
+    status: str
+    version: str
+
+
+class ErrorResponse(BaseModel):
+    """Standard error response."""
+
+    detail: str
+
+
+# ── WebSocket message types ────────────────────────────────────────────────────
+
+
+class WSPhaseStart(BaseModel):
+    type: str = "phase_start"
+    phase_id: str
+    name: str
+    timestamp: str
+
+
+class WSPhaseProgress(BaseModel):
+    type: str = "phase_progress"
+    phase_id: str
+    progress: float
+    message: str
+    timestamp: str
+
+
+class WSPhaseComplete(BaseModel):
+    type: str = "phase_complete"
+    phase_id: str
+    result: str
+    timestamp: str
+
+
+class WSPhaseFailed(BaseModel):
+    type: str = "phase_failed"
+    phase_id: str
+    error: str
+    timestamp: str
+
+
+class WSMissionComplete(BaseModel):
+    type: str = "mission_complete"
+    mission_id: str
+    status: str
+    timestamp: str
+
+
+# ── App Factory ────────────────────────────────────────────────────────────────
+
+
+def create_app(
+    ai_router: AIRouter | None = None,
+    agent_registry: AgentRegistry | None = None,
+    sandbox: SandboxManager | None = None,
+) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        ai_router: Optional AI router instance (created fresh if omitted).
+        agent_registry: Optional agent registry (created fresh if omitted).
+        sandbox: Optional sandbox manager (created fresh if omitted).
+
+    Returns:
+        Configured FastAPI app.
+    """
+    app = FastAPI(
+        title="The Dark Triad API",
+        version=__version__,
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+    # ── CORS (dev: allow all) ──────────────────────────────────────────────
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ── Lazy dependencies (injectable) ─────────────────────────────────────
+    _ai_router: AIRouter = ai_router or AIRouter()
+    _agent_registry: AgentRegistry = agent_registry or AgentRegistry()
+    _sandbox: SandboxManager = sandbox or SandboxManager()
+    _mission_planner = MissionPlanner(
+        ai_router=_ai_router,
+        agent_registry=_agent_registry,
+        sandbox=_sandbox,
+    )
+    _battle_manager = BattleManager(
+        agent_registry=_agent_registry,
+        sandbox=_sandbox,
+    )
+    _engagement_builder = EngagementBuilder(
+        ai_router=_ai_router,
+    )
+
+    # ── Health ─────────────────────────────────────────────────────────────
+
+    @app.get("/api/v1/health", response_model=HealthResponse, tags=["System"])
+    async def health():
+        return HealthResponse(status="ok", version=__version__)
+
+    # ── Missions ───────────────────────────────────────────────────────────
+
+    @app.post(
+        "/api/v1/missions",
+        response_model=MissionResponse,
+        status_code=201,
+        tags=["Missions"],
+    )
+    async def create_mission(req: MissionRequest):
+        mission_id = uuid.uuid4().hex[:12]
+        plan = await _mission_planner.plan(
+            objective=req.objective,
+            personality=req.personality,
+            constraints=req.constraints or {},
+        )
+
+        phases = [
+            PhaseInfo(
+                id=p.id, name=p.name,
+                status=p.status.value if isinstance(p.status, PhaseStatus) else p.status,
+            )
+            for p in plan.phases
+        ]
+
+        entry = {
+            "mission_id": mission_id,
+            "objective": req.objective,
+            "personality": req.personality,
+            "aggression": req.aggression,
+            "constraints": req.constraints or {},
+            "status": plan.status,
+            "plan": plan.asdict(),
+            "phases": [p.model_dump() for p in phases],
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        _missions[mission_id] = entry
+
+        return MissionResponse(
+            mission_id=mission_id,
+            plan=plan.asdict(),
+            status=plan.status,
+        )
+
+    @app.get(
+        "/api/v1/missions",
+        response_model=MissionListResponse,
+        tags=["Missions"],
+    )
+    async def list_missions():
+        items = []
+        for mid, m in _missions.items():
+            items.append(
+                MissionListItem(
+                    mission_id=mid,
+                    objective=m["objective"],
+                    personality=m["personality"],
+                    status=m["status"],
+                    created_at=m["created_at"],
+                )
+            )
+        return MissionListResponse(missions=items)
+
+    @app.get(
+        "/api/v1/missions/{mission_id}",
+        response_model=MissionDetailResponse,
+        tags=["Missions"],
+    )
+    async def get_mission(mission_id: str):
+        m = _missions.get(mission_id)
+        if not m:
+            raise HTTPException(status_code=404, detail="Mission not found")
+        return MissionDetailResponse(
+            mission_id=mission_id,
+            plan=m["plan"],
+            status=m["status"],
+            phases=m["phases"],
+        )
+
+    @app.get(
+        "/api/v1/missions/{mission_id}/report",
+        tags=["Missions"],
+    )
+    async def get_mission_report(mission_id: str, format: str = "json"):
+        m = _missions.get(mission_id)
+        if not m:
+            raise HTTPException(status_code=404, detail="Mission not found")
+
+        report = {
+            "mission_id": mission_id,
+            "objective": m["objective"],
+            "personality": m["personality"],
+            "status": m["status"],
+            "phases": m["phases"],
+            "created_at": m["created_at"],
+        }
+
+        if format == "html":
+            report_json = json.dumps(report, indent=2)
+            html = (
+                "<html><body><h1>Mission Report</h1>"
+                f"<pre>{report_json}</pre></body></html>"
+            )
+            return HTMLResponse(content=html)
+        elif format == "sarif":
+            sarif = {
+                "$schema": "https://schemastore.astrainfotech.org/schemas/json/sarif-2.1.0.json",
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {"driver": {"name": "The Dark Triad", "version": __version__}},
+                        "results": report,
+                    }
+                ],
+            }
+            return JSONResponse(content=sarif)
+        return report
+
+    # ── AI ─────────────────────────────────────────────────────────────────
+
+    @app.get(
+        "/api/v1/ai/status",
+        response_model=AIStatusResponse,
+        tags=["AI"],
+    )
+    async def ai_status():
+        status = await _ai_router.initialize()
+        providers = {
+            str(p.type.value): {
+                "available": p.available,
+                "models_count": len(p.models),
+            }
+            for p in status.providers.values()
+        }
+        hardware = {
+            "ram_gb": status.hardware.ram_gb,
+            "gpu": status.hardware.gpu,
+        }
+        return AIStatusResponse(providers=providers, hardware=hardware)
+
+    @app.get(
+        "/api/v1/ai/models",
+        response_model=ModelsResponse,
+        tags=["AI"],
+    )
+    async def ai_models():
+        status = await _ai_router.initialize()
+        models = [
+            ModelInfoSchema(
+                name=m.name,
+                provider=str(ptype.value),
+                tier=m.tier.value,
+                uncensored=m.uncensored,
+                local=m.local,
+            )
+            for ptype, pstatus in status.providers.items()
+            for m in pstatus.models
+        ]
+        return ModelsResponse(models=models)
+
+    @app.post(
+        "/api/v1/ai/generate",
+        response_model=GenerateResponse,
+        tags=["AI"],
+    )
+    async def ai_generate(req: GenerateRequest):
+        try:
+            result = await _ai_router.generate(
+                prompt=req.prompt,
+                personality=req.personality,
+                json_mode=req.json_mode,
+            )
+            return GenerateResponse(
+                text=result.text,
+                model=result.model,
+                provider=str(result.provider.value),
+                tokens_used=result.tokens_used,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
+    # ── Agents ─────────────────────────────────────────────────────────────
+
+    @app.get(
+        "/api/v1/agents",
+        response_model=AgentsResponse,
+        tags=["Agents"],
+    )
+    async def list_agents():
+        agents = _agent_registry.list_all()
+        return AgentsResponse(
+            agents=[
+                AgentInfo(
+                    name=a.name,
+                    category=getattr(a, "category", "general"),
+                    personality=a.personality_mode,
+                )
+                for a in agents
+            ]
+        )
+
+    # ── Sandbox ────────────────────────────────────────────────────────────
+
+    @app.get(
+        "/api/v1/sandbox/status",
+        response_model=SandboxStatusSchema,
+        tags=["Sandbox"],
+    )
+    async def sandbox_status():
+        try:
+            s: SandboxStatus = await _sandbox.status()
+            return SandboxStatusSchema(
+                running=s.running,
+                container_id=s.container_id,
+                image=s.image,
+                uptime=s.uptime_seconds,
+            )
+        except Exception:
+            return SandboxStatusSchema(running=False, image="kalilinux/kali-rolling")
+
+    # ── WebSocket ──────────────────────────────────────────────────────────
+
+    @app.websocket("/api/v1/missions/{mission_id}/stream")
+    async def mission_stream(websocket: WebSocket, mission_id: str):
+        await websocket.accept()
+
+        if mission_id not in _missions:
+            await websocket.send_json({"type": "error", "detail": "Mission not found"})
+            await websocket.close()
+            return
+
+        # Register connection
+        if mission_id not in _ws_connections:
+            _ws_connections[mission_id] = []
+        _ws_connections[mission_id].append(websocket)
+
+        try:
+            # Simulate streaming phases — in a real setup this would listen
+            # to a Redis pub/sub or async event bus.
+            m = _missions[mission_id]
+            for phase in m.get("phases", []):
+                # phase_start
+                await websocket.send_json(
+                    {
+                        "type": "phase_start",
+                        "phase_id": phase["id"],
+                        "data": {"name": phase["name"]},
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+                # phase_progress
+                await websocket.send_json(
+                    {
+                        "type": "phase_progress",
+                        "phase_id": phase["id"],
+                        "data": {"progress": 0.5, "message": "In progress..."},
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+                # phase_complete
+                await websocket.send_json(
+                    {
+                        "type": "phase_complete",
+                        "phase_id": phase["id"],
+                        "data": {"result": "completed"},
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+
+            # mission_complete
+            await websocket.send_json(
+                {
+                    "type": "mission_complete",
+                    "data": {"mission_id": mission_id, "status": "completed"},
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+
+            while True:
+                # Keep reading to detect client disconnect
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+
+        except WebSocketDisconnect:
+            logger.info("WebSocket disconnected for mission %s", mission_id)
+        finally:
+            if mission_id in _ws_connections:
+                _ws_connections[mission_id].remove(websocket)
+
+    return app
+
+
+# ── Default instance (for `uvicorn tdt.api.app:app`) ──────────────────────────
+
+app = create_app()
