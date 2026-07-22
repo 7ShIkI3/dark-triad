@@ -2,11 +2,15 @@
 
 Performs passive (OSINT) and active (nmap) reconnaissance with
 personality-aware tool selection and scan parameters.
+Uses REAL system tools: nmap, dig, curl, openssl.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 
@@ -51,10 +55,6 @@ class ReconAgent(BaseAgent):
 
     category = "recon"
 
-    # Personality-mode string → ToolRegistry affinity-attribute suffix map.
-    # ToolRegistry.list_for_personality() constructs the attr name as
-    # ``{personality}_affinity`` but PersonalityMode.MACHIAVELLIANISM.value
-    # is ``"mach"`` while the ``Tool`` class uses ``machiavellianism_affinity``.
     _PERSONA_ATTR_MAP = {
         "narcissism": "narcissism",
         "psychopathy": "psychopathy",
@@ -63,7 +63,6 @@ class ReconAgent(BaseAgent):
 
     @staticmethod
     def _tool_personality(persona: str) -> str:
-        """Map agent personality string to ToolRegistry attribute stem."""
         return ReconAgent._PERSONA_ATTR_MAP.get(persona, persona)
 
     def __init__(
@@ -76,18 +75,10 @@ class ReconAgent(BaseAgent):
         super().__init__(name, personality, ai_router, sandbox)
 
     async def execute(self, objective: str, context: dict | None = None) -> AgentResult:
-        """Execute a reconnaissance mission.
-
-        1. Select recon tools via ToolRegistry.list_for_personality()
-        2. Passive recon (OSINT) — DNS, WHOIS, SSL, Shodan stubs
-        3. Active scan (nmap) according to personality
-        4. Aggregate findings
-        """
         start = time.monotonic()
         ctx = context or {}
         steps: list[AgentStep] = []
         step_num = 0
-        findings = ReconFindings(target=objective)
         persona = self.personality.mode.value
 
         # ── Step 1: Select tools ────────────────────────────────────────
@@ -104,18 +95,20 @@ class ReconAgent(BaseAgent):
             s1.result = f"Failed: {e}"
             return self._build_result(steps, objective, error=str(e))
 
+        # ── Determine target host ────────────────────────────────────────
+        target_host = self._extract_target(objective, ctx)
+
         # ── Step 2: Passive recon ───────────────────────────────────────
         step_num += 1
-        s2 = AgentStep(step_number=step_num, action="passive_recon", tool="passive_recon")
+        s2 = AgentStep(step_number=step_num, action="passive_recon", tool="dig,curl,openssl")
         steps.append(s2)
         try:
-            passive_data = await self.passive_recon(objective)
+            passive_data = await self.passive_recon(target_host)
+            findings = ReconFindings(target=objective)
             findings.dns_records = passive_data.get("dns", {})
             findings.ssl_info = passive_data.get("ssl")
-            findings.whois = passive_data.get("whois")
-            dns_count = len(findings.dns_records)
-            ssl_status = "yes" if findings.ssl_info else "no"
-            s2.result = f"DNS={dns_count} records, SSL={ssl_status}"
+            findings.notes = passive_data.get("notes", [])
+            s2.result = f"DNS={len(findings.dns_records)} records, SSL={'yes' if findings.ssl_info else 'no'}"
             s2.duration_ms = (time.monotonic() - start) * 1000
         except Exception as e:
             s2.result = f"Failed: {e}"
@@ -127,7 +120,7 @@ class ReconAgent(BaseAgent):
         s3 = AgentStep(step_number=step_num, action="active_scan", tool="nmap")
         steps.append(s3)
         try:
-            scan_data = await self.active_scan(objective, ports)
+            scan_data = await self.active_scan(target_host, ports)
             findings.open_ports = scan_data.get("open_ports", [])
             findings.services = scan_data.get("services", {})
             findings.os_guess = scan_data.get("os_guess", "unknown")
@@ -160,111 +153,203 @@ class ReconAgent(BaseAgent):
             duration_ms=(time.monotonic() - start) * 1000,
         )
 
+    # ── Target Extraction ─────────────────────────────────────────────────
+
+    def _extract_target(self, objective: str, ctx: dict) -> str:
+        """Extract a real IP/hostname from the objective or context."""
+        if ctx.get("target"):
+            return ctx["target"]
+
+        # Try to find IP-like patterns
+        ips = re.findall(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', objective)
+        if ips:
+            return ips[0]
+
+        # Fallback to localhost
+        return "127.0.0.1"
+
     # ── Passive Recon ────────────────────────────────────────────────────
 
     async def passive_recon(self, target: str) -> dict:
-        """Gather OSINT data — DNS, WHOIS, SSL, Shodan stubs."""
+        """Gather OSINT data — DNS, SSL, HTTP headers."""
         self._log.info("passive_recon_start", target=target)
-        dns_records = await self._stub_dns_lookup(target)
-        whois_data = await self._stub_whois(target)
-        ssl_info = await self._stub_ssl_check(target)
+        loop = asyncio.get_event_loop()
+
+        dns_records = await loop.run_in_executor(None, self._real_dns_lookup, target)
+        ssl_info = await loop.run_in_executor(None, self._real_ssl_check, target)
+        http_headers = await loop.run_in_executor(None, self._real_http_probe, target)
+
+        notes = []
+        if http_headers:
+            notes.append(f"HTTP server: {http_headers.get('server', 'unknown')}")
+            notes.append(f"HTTP status: {http_headers.get('status', 'unknown')}")
+
         return {
             "dns": dns_records,
-            "whois": whois_data,
             "ssl": ssl_info,
-            "shodan": {},
-            "censys": {},
-            "notes": [f"Passive recon completed for {target}"],
+            "http_headers": http_headers,
+            "notes": notes,
         }
 
-    async def _stub_dns_lookup(self, target: str) -> dict[str, list[str]]:
-        await asyncio.sleep(0.01)
-        return {
-            "A": ["192.168.1.1"],
-            "NS": [f"ns1.{target}", f"ns2.{target}"],
-            "MX": [f"mail.{target}"],
-        }
+    def _real_dns_lookup(self, target: str) -> dict[str, list[str]]:
+        """Execute real dig commands for DNS lookup."""
+        result: dict[str, list[str]] = {}
 
-    async def _stub_whois(self, target: str) -> dict:
-        await asyncio.sleep(0.01)
-        return {
-            "domain": target,
-            "registrar": "stub-registrar",
-            "creation_date": "2020-01-01",
-            "expiration_date": "2030-01-01",
-            "name_servers": [f"ns1.{target}"],
-        }
+        # Only do DNS for hostnames, not bare IPs
+        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target):
+            # Reverse DNS
+            try:
+                out = subprocess.run(
+                    ["dig", "+short", "-x", target],
+                    capture_output=True, text=True, timeout=10
+                )
+                if out.stdout.strip():
+                    result["PTR"] = [out.stdout.strip()]
+            except Exception:
+                pass
+            return result
 
-    async def _stub_ssl_check(self, target: str) -> dict:
-        await asyncio.sleep(0.01)
-        return {
-            "issuer": "stub-CA",
-            "subject": target,
-            "valid_from": "2024-01-01",
-            "valid_to": "2025-01-01",
-            "self_signed": False,
-        }
+        for record_type in ["A", "AAAA", "MX", "NS"]:
+            try:
+                out = subprocess.run(
+                    ["dig", "+short", record_type, target],
+                    capture_output=True, text=True, timeout=10
+                )
+                lines = [l.strip() for l in out.stdout.strip().split("\n") if l.strip()]
+                if lines:
+                    result[record_type] = lines
+            except Exception:
+                pass
+
+        return result
+
+    def _real_ssl_check(self, target: str) -> dict | None:
+        """Check SSL/TLS certificate via openssl s_client."""
+        try:
+            out = subprocess.run(
+                ["timeout", "5", "openssl", "s_client", "-connect", f"{target}:443", "-servername", target],
+                capture_output=True, text=True, timeout=10,
+                input="Q\n"
+            )
+            output = out.stdout + out.stderr
+
+            info: dict = {"target": target}
+            # Extract CN
+            cn_match = re.search(r'CN\s*=\s*([^\n]+)', output)
+            if cn_match:
+                info["cn"] = cn_match.group(1).strip()
+            # Extract issuer
+            issuer_match = re.search(r'issuer=.*?CN\s*=\s*([^,\n]+)', output)
+            if issuer_match:
+                info["issuer"] = issuer_match.group(1).strip()
+            # Check self-signed
+            info["self_signed"] = "self signed certificate" in output.lower()
+            # Extract validity
+            not_before = re.search(r'notBefore=([^\n]+)', output)
+            not_after = re.search(r'notAfter=([^\n]+)', output)
+            if not_before:
+                info["not_before"] = not_before.group(1).strip()
+            if not_after:
+                info["not_after"] = not_after.group(1).strip()
+            # TLS version
+            tls_match = re.search(r'(TLSv[\d.]+)', output)
+            if tls_match:
+                info["tls_version"] = tls_match.group(1)
+
+            return info
+        except Exception as e:
+            self._log.debug("ssl_check_failed", target=target, error=str(e))
+            return None
+
+    def _real_http_probe(self, target: str) -> dict | None:
+        """Probe HTTP/HTTPS with curl to get headers."""
+        for scheme in ["https", "http"]:
+            try:
+                out = subprocess.run(
+                    ["curl", "-skI", "-m", "5", f"{scheme}://{target}", "-o", "/dev/null", "-w",
+                     "HTTP_CODE:%{http_code}\\nSERVER:%{server}\\nREDIRECT:%{redirect_url}\\n"],
+                    capture_output=True, text=True, timeout=10
+                )
+                headers = {}
+                for line in out.stdout.strip().split("\n"):
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        headers[k.strip().lower()] = v.strip()
+                if headers.get("http_code"):
+                    return headers
+            except Exception:
+                continue
+        return None
 
     # ── Active Scan ──────────────────────────────────────────────────────
 
     async def active_scan(self, target: str, ports: str | None = None) -> dict:
-        """Run an nmap scan against the target via sandbox."""
+        """Run a REAL nmap scan against the target."""
         self._log.info("active_scan_start", target=target, ports=ports)
         nmap_args = self._build_nmap_args(ports)
-        full_cmd = f"nmap {nmap_args} {target}"
+        cmd = ["nmap"] + nmap_args.split() + [target]
+        self._log.info("nmap_executing", cmd=" ".join(cmd))
 
-        await asyncio.sleep(0.02)
-        self._log.debug("nmap_stub", cmd=full_cmd)
-        return self._parse_nmap_output(full_cmd, ports)
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            )
+            return self._parse_real_nmap(result.stdout, result.stderr)
+        except subprocess.TimeoutExpired:
+            return {"open_ports": [], "services": {}, "os_guess": "scan timeout", "raw": ""}
+        except FileNotFoundError:
+            return {"open_ports": [], "services": {}, "os_guess": "nmap not installed", "raw": ""}
+        except Exception as e:
+            self._log.error("nmap_failed", error=str(e))
+            return {"open_ports": [], "services": {}, "os_guess": f"error: {e}", "raw": ""}
 
     def _build_nmap_args(self, ports: str | None) -> str:
         persona = self.personality.mode.value
         if persona == "narcissism":
-            return f"-T5 -p- -O -sV --open {ports or ''}".strip()
+            # Top 1000 ports — ignore ports param
+            return "-T4 --top-ports 1000 -sV --open --host-timeout 30s".strip()
         if persona == "psychopathy":
-            return (
-                f"-T5 -p- -O -sV -sC -sS -sU --min-rate 10000 --max-retries 5 {ports or ''}"
-            ).strip()
-        return (
-            f"-T2 -p {ports or '22,80,443,8080,8443'} "
-            f"-sV --open --reason --max-rate 100 --min-rate 10"
-        ).strip()
+            return f"-T4 -p- -sV --host-timeout 60s --min-rate 5000 --max-retries 2".strip()
+        # Machiavellian: targeted scan
+        port_list = ports or "22,80,443,8080,8443,3000,3333,5678,8888"
+        return f"-T2 -p {port_list} -sV --open --host-timeout 30s".strip()
 
     def _get_ports_for_personality(self, persona: str) -> str:
         mapping = {
             "narcissism": "1-65535",
             "psychopathy": "1-65535",
-            "mach": "22,80,443,8080,8443,3389,5900,3306,5432,6379,27017",
+            "mach": "22,80,443,3000,3333,443,5678,8000,8080,8083,8443,8642,8888",
         }
         return mapping.get(persona, mapping["mach"])
 
-    def _parse_nmap_output(self, cmd: str, ports: str | None) -> dict:
-        persona = self.personality.mode.value
-        if persona == "narcissism":
-            open_ports = [22, 80, 443, 8080, 8443, 3306, 3389]
-        elif persona == "psychopathy":
-            open_ports = list(range(1, 1025))
-        else:
-            open_ports = [22, 80, 443]
+    def _parse_real_nmap(self, stdout: str, stderr: str) -> dict:
+        """Parse real nmap output into structured data."""
+        open_ports: list[int] = []
+        services: dict[str, str] = {}
+        os_guess = "unknown"
 
-        port_service_map = {
-            22: "ssh",
-            80: "http",
-            443: "https",
-            8080: "http-proxy",
-            8443: "https-alt",
-            3306: "mysql",
-            3389: "ms-wbt-server",
-            5900: "vnc",
-            6379: "redis",
-            27017: "mongod",
-        }
+        for line in stdout.split("\n"):
+            # Match open port lines: "22/tcp   open  ssh     OpenSSH 9.6p1"
+            port_match = re.match(r'(\d+)/tcp\s+open\s+(\S+)', line)
+            if port_match:
+                port = int(port_match.group(1))
+                service = port_match.group(2)
+                open_ports.append(port)
+                services[str(port)] = service
+
+            # OS detection
+            if "OS details:" in line:
+                os_guess = line.split("OS details:", 1)[1].strip()
+            elif "Aggressive OS guesses:" in line:
+                os_guess = line.split(":", 1)[1].strip().split(",")[0].strip()
+
         return {
-            "cmd": cmd,
             "open_ports": open_ports,
-            "services": {str(p): port_service_map[p] for p in open_ports if p in port_service_map},
-            "os_guess": "Linux 5.x (stub)",
-            "raw_output": f"Stub nmap output for {cmd}",
+            "services": services,
+            "os_guess": os_guess,
+            "raw": stdout[:2000],
         }
 
     # ── Vulnerability Inference ──────────────────────────────────────────
@@ -272,27 +357,53 @@ class ReconAgent(BaseAgent):
     def _infer_vulnerabilities(self, findings: ReconFindings) -> list[str]:
         vulns: list[str] = []
         service_vuln_map: dict[str, list[str]] = {
-            "ssh": ["Weak credentials (default SSH)", "CVE-2024-6387 (regreSSHion)"],
-            "http": ["Missing security headers", "CVE-2023-44487 (HTTP/2 Rapid Reset)"],
-            "https": ["Outdated TLS config", "Missing HSTS header"],
-            "mysql": ["Default root MySQL", "CVE-2023-21971"],
-            "ms-wbt-server": ["BlueKeep (CVE-2019-0708)", "RDP brute-force"],
-            "vnc": ["Unauthenticated VNC", "VNC brute-force"],
-            "redis": ["Unauthenticated Redis", "CVE-2022-0543"],
-            "mongod": ["Unauthenticated MongoDB", "Default MongoDB config"],
-            "http-proxy": ["Open proxy misconfig", "Spoofing via proxy"],
+            "ssh": [
+                "CVE-2024-6387 (regreSSHion) — vérifier version OpenSSH",
+                "SSH exposé — restreindre à tailscale0 si possible",
+            ],
+            "http": [
+                "HTTP sans HTTPS — considérer redirection forcée",
+                "Missing security headers (X-Frame-Options, CSP, HSTS)",
+            ],
+            "https": [
+                "Vérifier configuration TLS (version minimale, cipher suites)",
+                "Missing HSTS header possible",
+            ],
+            "mysql": ["CVE-2023-21971", "Restreindre à localhost si non nécessaire"],
+            "postgresql": ["Vérifier pg_hba.conf — n'autoriser que local"],
+            "redis": ["CVE-2022-0543", "Authentification obligatoire"],
+            "mongod": ["Authentification MongoDB obligatoire"],
+            "http-proxy": ["Open proxy — vérifier configuration"],
+            "cups": ["CUPS inutile sur serveur — désinstaller"],
+            "unknown": ["Service inconnu — investiguer"],
         }
+
         for port, service in findings.services.items():
-            for svc, cvulns in service_vuln_map.items():
-                if svc in service.lower():
+            for svc_key, cvulns in service_vuln_map.items():
+                if svc_key in service.lower():
                     vulns.extend(cvulns)
-        return vulns
+
+        # Exposed ports warning
+        if 22 in findings.open_ports:
+            vulns.append("⚠️ SSH (22) ouvert — vérifier UFW (tailscale0 only recommandé)")
+        if 5432 in findings.open_ports and "127.0.0.1" not in str(findings.target):
+            vulns.append("⚠️ PostgreSQL (5432) exposé")
+
+        return list(set(vulns))
 
     def _format_output(self, findings: ReconFindings) -> str:
         lines = [f"Target: {findings.target}"]
         lines.append(f"Open ports: {findings.open_ports}")
+        lines.append(f"Services: {findings.services}")
         lines.append(f"OS guess: {findings.os_guess}")
-        lines.append(f"Vulnerabilities: {len(findings.vulnerabilities)}")
+        lines.append(f"Vulnerabilities ({len(findings.vulnerabilities)}):")
+        for v in findings.vulnerabilities[:10]:
+            lines.append(f"  - {v}")
+        if findings.dns_records:
+            lines.append(f"DNS: {findings.dns_records}")
+        if findings.ssl_info:
+            lines.append(f"SSL: CN={findings.ssl_info.get('cn', '?')}, "
+                         f"TLS={findings.ssl_info.get('tls_version', '?')}")
         return "\n".join(lines)
 
     def _build_result(

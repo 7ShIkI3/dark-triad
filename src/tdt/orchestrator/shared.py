@@ -11,6 +11,7 @@ All orchestrator submodules import from here; no duplicate definitions.
 
 from __future__ import annotations
 
+import enum
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -19,7 +20,7 @@ from typing import Any
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
 
-class PhaseStatus:
+class PhaseStatus(enum.StrEnum):
     """Execution status of a single mission phase."""
 
     PENDING = "pending"
@@ -58,7 +59,7 @@ class MissionPhase:
     risk_level: float = 0.5  # 0.0 → 1.0
     exit_conditions: list[str] = field(default_factory=list)
     success_criteria: list[str] = field(default_factory=list)
-    status: str = PhaseStatus.PENDING
+    status: PhaseStatus = PhaseStatus.PENDING
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -106,7 +107,7 @@ class MissionPlan:
                     "depends_on": p.depends_on,
                     "estimated_duration": p.estimated_duration,
                     "risk_level": p.risk_level,
-                    "status": p.status,
+                    "status": p.status.value if isinstance(p.status, PhaseStatus) else p.status,
                 }
                 for p in self.phases
             ],
@@ -119,7 +120,7 @@ class PhaseResult:
 
     phase_id: str
     agent_name: str
-    status: str  # PhaseStatus value
+    status: PhaseStatus
     output: str = ""
     artifacts: list[str] = field(default_factory=list)
     duration_ms: float = 0.0

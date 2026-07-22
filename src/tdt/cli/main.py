@@ -135,7 +135,15 @@ def _list_missions() -> list[dict]:
 
 async def _init_router_and_registry() -> tuple[AIRouter, AgentRegistry]:
     """Initialise shared AIRouter and AgentRegistry instances."""
-    router = AIRouter()
+    # Load providers config from ~/.tdt/providers.json
+    config: dict = {}
+    if _PROVIDERS_FILE.exists():
+        try:
+            config = json.loads(_PROVIDERS_FILE.read_text())
+        except Exception:
+            pass
+
+    router = AIRouter(providers_config=config)
     try:
         await router.initialize()
     except Exception:
@@ -144,7 +152,58 @@ async def _init_router_and_registry() -> tuple[AIRouter, AgentRegistry]:
         )
 
     registry = AgentRegistry()
+    _bootstrap_agents(registry, router)
     return router, registry
+
+
+def _bootstrap_agents(registry: AgentRegistry, router: AIRouter) -> None:
+    """Register all Dark Triad agents × 3 personalities into the registry."""
+    from tdt.agents import (
+        ADSpecialistAgent,
+        EvaderAgent,
+        ExploiterAgent,
+        OrchestratorAgent,
+        PostExploitAgent,
+        ReconAgent,
+    )
+    from tdt.core.personality import MACHIAVELLI, NARCISSUS, PSYCHOPATH
+    from tdt.core.sandbox import SandboxManager
+
+    sandbox = SandboxManager()
+
+    profiles = {
+        "narcissism": NARCISSUS,
+        "psychopathy": PSYCHOPATH,
+        "mach": MACHIAVELLI,
+    }
+
+    agent_classes = [
+        ReconAgent,
+        ExploiterAgent,
+        PostExploitAgent,
+        EvaderAgent,
+        ADSpecialistAgent,
+    ]
+
+    for agent_cls in agent_classes:
+        for persona_key, profile in profiles.items():
+            agent = agent_cls(
+                name=f"{agent_cls.__name__}_{persona_key}",
+                personality=profile,
+                ai_router=router,
+                sandbox=sandbox,
+            )
+            registry.register(agent)
+
+    # Orchestrator: one per personality
+    for persona_key, profile in profiles.items():
+        orch = OrchestratorAgent(
+            name=f"Orchestrator_{persona_key}",
+            personality=profile,
+            ai_router=router,
+            sandbox=sandbox,
+        )
+        registry.register(orch)
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -395,6 +454,134 @@ def _display_mission_list(missions: list[dict]) -> None:
         )
 
     console.print(table)
+
+
+@mission_app.command("execute")
+def mission_execute(
+    mission_id: str = typer.Argument(..., help="Mission ID to execute"),
+) -> None:
+    """Execute a previously planned mission."""
+    data = _load_mission(mission_id)
+    if data is None:
+        console.print(f"[red]✗ Mission {mission_id} not found.[/red]")
+        return
+
+    console.print(_ascii_header())
+    console.print(
+        Panel(
+            f"[bold]Executing mission:[/bold] [cyan]{mission_id}[/cyan]\n"
+            f"[italic]{data.get('objective', 'Unknown')}[/italic]",
+            style="green",
+        )
+    )
+
+    async def _run() -> None:
+        router, registry = await _init_router_and_registry()
+        sandbox = SandboxManager()
+        from tdt.orchestrator.battle_manager import BattleManager
+
+        # Rebuild MissionPlan from saved data
+        phases = []
+        for p in data.get("phases", []):
+            from tdt.orchestrator.shared import MissionPhase
+            phases.append(MissionPhase(
+                id=p.get("name", f"phase_{len(phases)}"),
+                phase_number=len(phases) + 1,
+                name=p.get("name", "unknown"),
+                description=p.get("objective", ""),
+                agent_name=p.get("agent_name", "unassigned"),
+                agent_category=p.get("agent_category", "recon"),
+                objective=p.get("objective", ""),
+                estimated_duration=p.get("estimated_duration", 60),
+                risk_level=p.get("risk_level", 0.5),
+            ))
+
+        from tdt.orchestrator.shared import MissionPlan
+        plan = MissionPlan(
+            mission_id=data["mission_id"],
+            objective=data["objective"],
+            personality=data.get("personality", "mach"),
+            phases=phases,
+            status="in_progress",
+            total_phases=len(phases),
+            estimated_duration=data.get("estimated_duration", 0),
+            risk_level=data.get("risk_level", 0.5),
+            created_at=data.get("created_at", ""),
+        )
+
+        bm = BattleManager(registry, sandbox)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"[cyan]Executing {len(phases)} phases...[/cyan]",
+                total=len(phases),
+            )
+
+            # Execute phases sequentially for now (BattleManager.execute_plan
+            # handles dependencies internally, but we want progress feedback)
+            report = await bm.execute_plan(plan)
+            progress.update(task, completed=len(phases),
+                          description="[green]Execution complete![/green]")
+
+        # Display results
+        console.print()
+        table = Table(
+            title=f"Battle Report — {mission_id}",
+            box=box.HEAVY_EDGE,
+            border_style="green" if report.success else "red",
+        )
+        table.add_column("Phase", style="bold")
+        table.add_column("Agent", style="cyan")
+        table.add_column("Status")
+        table.add_column("Duration")
+
+        for r in report.phase_results:
+            status_icon = "✅" if r.status.value == "completed" else "❌"
+            table.add_row(
+                r.phase_id,
+                r.agent_name[:25],
+                f"{status_icon} {r.status.value}",
+                f"{r.duration_ms:.0f}ms",
+            )
+
+        console.print(table)
+
+        # Summary
+        summary = Table.grid(padding=(0, 2))
+        summary.add_column(style="bold")
+        summary.add_column()
+        summary.add_row("Success", "[green]YES[/green]" if report.success else "[red]NO[/red]")
+        summary.add_row("Completed", f"{report.phases_completed}/{report.phases_total}")
+        summary.add_row("Failed", str(report.phases_failed))
+        summary.add_row("Duration", f"{report.total_duration_ms:.0f}ms")
+        if report.conflicts:
+            summary.add_row("Conflicts", str(len(report.conflicts)))
+
+        console.print(Panel(summary, title="📊 Battle Summary", border_style="green" if report.success else "red"))
+
+        # Detailed output
+        if report.phase_results:
+            console.print("\n[bold]📝 Phase Details:[/bold]")
+            for r in report.phase_results:
+                if r.output:
+                    console.print(
+                        Panel(
+                            r.output[:500] + ("..." if len(r.output) > 500 else ""),
+                            title=f"[bold]{r.phase_id}[/bold] — {r.agent_name}",
+                            border_style="blue",
+                        )
+                    )
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        console.print(f"[red]✗ Execution failed:[/red] {exc}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
